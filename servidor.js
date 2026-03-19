@@ -1,12 +1,8 @@
-// Importando as ferramentas que instalamos
 const express = require('express');
 const cors = require('cors');
 
 const app = express();
 app.use(cors());
-
-// COLE SUA CHAVE DA ALPHA VANTAGE AQUI DENTRO DAS ASPAS
-const MINHA_CHAVE_API = 'OTN29T76NKSS2GRS';
 
 // Nosso "Cache" (Memória temporária do servidor)
 let cacheMercado = {
@@ -15,51 +11,51 @@ let cacheMercado = {
 };
 
 let ultimaBuscaNaApi = 0;
-// Tempo de cache: 60 minutos (para não estourar o limite gratuito de 25/dia)
-const TEMPO_CACHE_MILISSEGUNDOS = 60 * 60 * 1000; 
+// Tempo de cache reduzido: 5 minutos (O Yahoo Finance é bem mais flexível!)
+const TEMPO_CACHE_MILISSEGUNDOS = 5 * 60 * 1000; 
+
+// Função isolada para buscar os dados direto no motor do Yahoo
+async function buscarPrecoYahoo(ticker) {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+    const resposta = await fetch(url);
+    const dados = await resposta.json();
+    
+    const resultado = dados.chart.result[0].meta;
+    return {
+        atual: resultado.regularMarketPrice,
+        fechamentoAnterior: resultado.previousClose || resultado.chartPreviousClose
+    };
+}
 
 app.get('/api/commodities', async (req, res) => {
     const agora = Date.now();
 
-    // Se passou mais de 60 minutos desde a última busca, vamos na API Real
+    // Se passou mais de 5 minutos, vamos na API Real do Yahoo
     if (agora - ultimaBuscaNaApi > TEMPO_CACHE_MILISSEGUNDOS) {
-        console.log("⏳ Buscando dados frescos na Alpha Vantage...");
+        console.log("⏳ Buscando dados frescos no Yahoo Finance...");
         
         try {
-            // Buscando Ouro (XAU para USD)
-            const urlOuro = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey=${MINHA_CHAVE_API}`;
-            const respostaOuro = await fetch(urlOuro);
-            const dadosOuro = await respostaOuro.json();
+            // GC=F é o código oficial do Ouro, BZ=F é o do Petróleo Brent no Yahoo
+            const dadosOuro = await buscarPrecoYahoo('GC=F');
+            const dadosPetroleo = await buscarPrecoYahoo('BZ=F');
 
-            // Buscando Petróleo (WTI)
-            const urlPetroleo = `https://www.alphavantage.co/query?function=WTI&interval=daily&apikey=${MINHA_CHAVE_API}`;
-            const respostaPetroleo = await fetch(urlPetroleo);
-            const dadosPetroleo = await respostaPetroleo.json();
-
-            // Atualizando nosso Cache com os dados reais
-            if (dadosOuro["Realtime Currency Exchange Rate"]) {
-                const precoOuro = parseFloat(dadosOuro["Realtime Currency Exchange Rate"]["5. Exchange Rate"]);
-                cacheMercado.ouro.atual = precoOuro;
-                cacheMercado.ouro.fechamentoAnterior = precoOuro * 0.99; // Alpha Vantage não dá o fechamento no câmbio simples, simulamos uma variação de 1%
-            }
-
-            if (dadosPetroleo.data && dadosPetroleo.data.length >= 2) {
-                cacheMercado.petroleo.atual = parseFloat(dadosPetroleo.data[0].value);
-                cacheMercado.petroleo.fechamentoAnterior = parseFloat(dadosPetroleo.data[1].value);
-            }
+            cacheMercado.ouro = dadosOuro;
+            cacheMercado.petroleo = dadosPetroleo;
 
             ultimaBuscaNaApi = agora;
-            console.log("✅ Dados atualizados com sucesso!");
+            console.log("✅ Dados atualizados com sucesso pelo Yahoo Finance!");
 
         } catch (erro) {
-            console.error("❌ Erro ao buscar na API. Usando dados do cache antigo.", erro);
+            console.error("❌ Erro ao buscar no Yahoo Finance. Mantendo cache.", erro.message);
         }
     }
 
-    // O servidor responde instantaneamente com o Cache (seja ele novo ou antigo)
+    // O servidor responde instantaneamente com o Cache
     res.json(cacheMercado);
 });
 
-app.listen(3000, () => {
-    console.log('✅ Servidor Backend PRO rodando na porta 3000!');
+// A porta dinâmica (process.env.PORT) é o padrão ouro para hospedar no Render
+const PORTA = process.env.PORT || 3000;
+app.listen(PORTA, () => {
+    console.log(`✅ Servidor Backend PRO rodando na porta ${PORTA}!`);
 });
