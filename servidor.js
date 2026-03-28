@@ -4,49 +4,36 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
-let cacheMercado = {
-    dolar: { atual: 5.00, fechamentoAnterior: 4.95 },
-    euro: { atual: 5.40, fechamentoAnterior: 5.35 },
-    bitcoin: { atual: 65000.00, fechamentoAnterior: 64000.00 },
-    ouro: { atual: 2350.00, fechamentoAnterior: 2330.00 },
-    petroleo: { atual: 82.50, fechamentoAnterior: 83.50 }
-};
+// NOVA ROTA: Busca dezenas de cotações em uma única chamada (Alta Performance)
+app.get('/api/cotacoes-lote', async (req, res) => {
+    const tickers = req.query.tickers; // Ex: AAPL,MSFT,PETR4.SA
+    if (!tickers) return res.json({});
 
-let ultimaBuscaNaApi = 0;
-const TEMPO_CACHE_MILISSEGUNDOS = 5 * 60 * 1000; 
-
-async function buscarPrecoYahoo(ticker) {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
-    const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const dados = await resposta.json();
-    const resultado = dados.chart.result[0].meta;
-    return {
-        atual: resultado.regularMarketPrice,
-        fechamentoAnterior: resultado.previousClose || resultado.chartPreviousClose
-    };
-}
-
-app.get('/api/commodities', async (req, res) => {
-    const agora = Date.now();
-    if (agora - ultimaBuscaNaApi > TEMPO_CACHE_MILISSEGUNDOS) {
-        try {
-            cacheMercado.dolar = await buscarPrecoYahoo('BRL=X');
-            cacheMercado.euro = await buscarPrecoYahoo('EURBRL=X');
-            cacheMercado.bitcoin = await buscarPrecoYahoo('BTC-USD');
-            cacheMercado.ouro = await buscarPrecoYahoo('GC=F');
-            cacheMercado.petroleo = await buscarPrecoYahoo('BZ=F');
-            ultimaBuscaNaApi = agora;
-        } catch (erro) { console.error("Erro no Yahoo. Mantendo cache."); }
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${tickers}`;
+    
+    try {
+        const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const dados = await resposta.json();
+        
+        const resultados = {};
+        if (dados.quoteResponse && dados.quoteResponse.result) {
+            dados.quoteResponse.result.forEach(ativo => {
+                resultados[ativo.symbol] = {
+                    atual: ativo.regularMarketPrice,
+                    fechamentoAnterior: ativo.regularMarketPreviousClose
+                };
+            });
+        }
+        res.json(resultados);
+    } catch (erro) {
+        console.error("Erro ao buscar em lote:", erro.message);
+        res.status(500).json({erro: "Falha na API"});
     }
-    res.json(cacheMercado);
 });
 
-// NOVA ROTA DE HISTÓRICO DINÂMICO
-// Agora ela aceita queries, ex: /api/historico/BTC-USD?range=5y&interval=1wk
+// ROTA DE HISTÓRICO (Mantida igual, pois já suporta o gráfico de 5 anos)
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
-    
-    // Se o site não pedir um período específico, usamos 1 mês por padrão
     const range = req.query.range || '1mo'; 
     const interval = req.query.interval || '1d';
 
@@ -64,12 +51,12 @@ app.get('/api/historico/:ticker', async (req, res) => {
                 data: new Date(timestamp * 1000).toISOString().split('T')[0],
                 preco: parseFloat(precos[index]).toFixed(2)
             };
-        }).filter(item => item.preco !== "NaN"); // Remove dias sem negociação
+        }).filter(item => item.preco !== "NaN"); 
 
         res.json({ ticker: ticker, historico: dadosProcessados });
 
     } catch (erro) {
-        res.status(500).json({erro: `Erro ao buscar histórico.`});
+        res.status(500).json({erro: `Erro ao buscar histórico de ${ticker}.`});
     }
 });
 
