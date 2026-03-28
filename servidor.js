@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
-import yahooFinance from 'yahoo-finance2'; // Importação limpa e oficial da v3!
+import YahooFinance from 'yahoo-finance2'; // 1. Importa a Fábrica (Letras Maiúsculas)
+
+const yahooFinance = new YahooFinance(); // 2. LIGA A MÁQUINA! (Exatamente como o erro pediu)
 
 const app = express();
 app.use(cors());
@@ -52,7 +54,7 @@ app.get('/api/indicadores/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     
     try {
-        // A biblioteca v3 faz o trabalho perfeitamente e sem erros
+        // A nossa nova ferramenta oficial em ação!
         const result = await yahooFinance.quoteSummary(ticker, {
             modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData']
         });
