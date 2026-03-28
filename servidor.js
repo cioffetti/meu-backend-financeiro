@@ -1,12 +1,11 @@
-const express = require('express');
-const cors = require('cors');
-// Importando a nossa nova chave-mestra
-const yahooFinance = require('yahoo-finance2').default; 
+import express from 'express';
+import cors from 'cors';
+import yahooFinance from 'yahoo-finance2'; // Sintaxe moderna de importação!
 
 const app = express();
 app.use(cors());
 
-// ROTA 1: Cotações em Lote (Mantida)
+// ROTA 1: Cotações em Lote 
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -30,7 +29,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     } catch (erro) { res.status(500).json({erro: "Falha na API Lote"}); }
 });
 
-// ROTA 2: Histórico de Gráficos (Mantida)
+// ROTA 2: Histórico de Gráficos 
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -48,12 +47,11 @@ app.get('/api/historico/:ticker', async (req, res) => {
     } catch (erro) { res.status(500).json({erro: `Erro histórico.`}); }
 });
 
-// ROTA 3: Indicadores (AGORA BLINDADA COM YAHOO-FINANCE2)
+// ROTA 3: Indicadores Fundamentalistas
 app.get('/api/indicadores/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     
     try {
-        // A biblioteca faz todo o trabalho duro de passar pela segurança
         const result = await yahooFinance.quoteSummary(ticker, {
             modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData']
         });

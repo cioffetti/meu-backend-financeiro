@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "API Financeira Pro",
   "main": "servidor.js",
+  "type": "module",
   "scripts": {
     "start": "node servidor.js"
   },
