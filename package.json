@@ -10,6 +10,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "yahoo-finance2": "^2.11.3"
+    "yahoo-finance2": "^3.14.0"
   }
 }
