@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import yahooFinance from 'yahoo-finance2'; // Sintaxe moderna de importação!
+import pkg from 'yahoo-finance2'; // Importamos o pacote bruto
+const yahooFinance = pkg.default || pkg; // A mágica: Desempacotamos do jeito certo para o Node 22!
 
 const app = express();
 app.use(cors());
