@@ -1,11 +1,16 @@
 import express from 'express';
 import cors from 'cors';
-import YahooFinance from 'yahoo-finance2'; // 1. Importa a Fábrica (Letras Maiúsculas)
+import YahooFinance from 'yahoo-finance2';
 
-const yahooFinance = new YahooFinance(); // 2. LIGA A MÁQUINA! (Exatamente como o erro pediu)
+// 1. Desligamos o aviso chato e iniciamos a fábrica
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const app = express();
 app.use(cors());
+
+// 2. Criamos a Memória RAM para os Indicadores (Cache de 1 hora)
+const cacheIndicadores = {};
+const TEMPO_CACHE_INDICADORES = 60 * 60 * 1000;
 
 // ROTA 1: Cotações em Lote 
 app.get('/api/cotacoes-lote', async (req, res) => {
@@ -49,17 +54,24 @@ app.get('/api/historico/:ticker', async (req, res) => {
     } catch (erro) { res.status(500).json({erro: `Erro histórico.`}); }
 });
 
-// ROTA 3: Indicadores Fundamentalistas
+// ROTA 3: Indicadores Fundamentalistas COM CACHE INTELIGENTE
 app.get('/api/indicadores/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
+    const agora = Date.now();
+
+    // Se já temos no cache e ainda é válido, devolvemos direto da memória!
+    if (cacheIndicadores[ticker] && (agora - cacheIndicadores[ticker].timestamp < TEMPO_CACHE_INDICADORES)) {
+        console.log(`⚡ Retornando Indicadores de ${ticker} direto do Cache!`);
+        return res.json(cacheIndicadores[ticker].dados);
+    }
     
     try {
-        // A nossa nova ferramenta oficial em ação!
+        console.log(`🌐 Buscando Indicadores de ${ticker} no Yahoo...`);
         const result = await yahooFinance.quoteSummary(ticker, {
             modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData']
         });
 
-        res.json({
+        const dadosFormatados = {
             pl: result.summaryDetail?.trailingPE,
             pvp: result.defaultKeyStatistics?.priceToBook,
             dy: result.summaryDetail?.dividendYield,
@@ -67,7 +79,15 @@ app.get('/api/indicadores/:ticker', async (req, res) => {
             roa: result.financialData?.returnOnAssets,
             margemLiquida: result.financialData?.profitMargins,
             dividaPL: result.financialData?.debtToEquity 
-        });
+        };
+
+        // Salvamos na memória para não incomodar o Yahoo de novo tão cedo
+        cacheIndicadores[ticker] = {
+            timestamp: agora,
+            dados: dadosFormatados
+        };
+
+        res.json(dadosFormatados);
     } catch (erro) {
         console.error(`Erro Indicadores para ${ticker}:`, erro.message);
         res.json({}); 
