@@ -6,6 +6,7 @@ import fs from 'fs';
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const app = express();
 app.use(cors());
+app.use(express.json()); // PERMITE QUE O SERVIDOR RECEBA PACOTES DE DADOS!
 
 // --- SISTEMA DE BANCO DE DADOS LOCAL ---
 const ARQUIVO_CACHE = './banco_de_dados.json';
@@ -24,188 +25,96 @@ function salvarNoDisco() {
     catch (e) { console.error("Erro ao salvar no disco."); }
 }
 
-// ROTA 1: Cotações em Lote (Validade: 5 minutos)
+// ROTA 1: Cotações em Lote (Igual)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
     const tickers = tickersStr.split(',');
     const agora = Date.now();
-    const VALIDADE_COTACOES = 5 * 60 * 1000; 
-
+    
     const fetchTicker = async (t) => {
-        if (cacheMemoria.cotacoes[t] && (agora - cacheMemoria.cotacoes[t].timestamp < VALIDADE_COTACOES)) {
-            return cacheMemoria.cotacoes[t].dados;
-        }
+        if (cacheMemoria.cotacoes[t] && (agora - cacheMemoria.cotacoes[t].timestamp < 300000)) return cacheMemoria.cotacoes[t].dados;
         try {
             const url = `https://query2.finance.yahoo.com/v8/finance/chart/${t}?range=1d&interval=1d`;
             const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            if (!resposta.ok) throw new Error("Erro 429");
+            if (!resposta.ok) throw new Error("Erro");
             const dados = await resposta.json();
             const meta = dados.chart.result[0].meta;
             const resultado = { ticker: t, atual: meta.regularMarketPrice, fechamentoAnterior: meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice };
             cacheMemoria.cotacoes[t] = { timestamp: agora, dados: resultado };
             return resultado;
-        } catch (e) {
-            if (cacheMemoria.cotacoes[t]) return cacheMemoria.cotacoes[t].dados;
-            return null;
-        }
+        } catch (e) { return cacheMemoria.cotacoes[t] ? cacheMemoria.cotacoes[t].dados : null; }
     };
 
     const results = await Promise.all(tickers.map(t => fetchTicker(t)));
     salvarNoDisco(); 
-    
     const respostaFinal = {};
     results.forEach(r => { if(r) respostaFinal[r.ticker] = { atual: r.atual, fechamentoAnterior: r.fechamentoAnterior }; });
     res.json(respostaFinal);
 });
 
-// ROTA 2: Histórico de Gráficos (Validade: 1 hora)
+// ROTA 2: Histórico de Gráficos (Igual)
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
     const interval = req.query.interval || '1d';
     const chave = `${ticker}-${range}`; 
     const agora = Date.now();
-    const VALIDADE_HISTORICO = 60 * 60 * 1000; 
 
-    if (cacheMemoria.historico[chave] && (agora - cacheMemoria.historico[chave].timestamp < VALIDADE_HISTORICO)) {
-        return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
-    }
+    if (cacheMemoria.historico[chave] && (agora - cacheMemoria.historico[chave].timestamp < 3600000)) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
 
-    const targetUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
-    
     try {
-        const resposta = await fetch(targetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        if (!resposta.ok) throw new Error("Erro 429");
+        const url = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
+        const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!resposta.ok) throw new Error("Erro");
         const dados = await resposta.json();
         const timestamps = dados.chart.result[0].timestamp;
         const quotes = dados.chart.result[0].indicators.quote[0]; 
-        
-        const processados = timestamps.map((t, i) => ({
-            time: new Date(t * 1000).toISOString().split('T')[0], 
-            open: parseFloat(quotes.open[i]), high: parseFloat(quotes.high[i]), low: parseFloat(quotes.low[i]),
-            close: parseFloat(quotes.close[i]), value: parseFloat(quotes.volume[i]) 
-        })).filter(item => !isNaN(item.close) && item.close !== null); 
-        
+        const processados = timestamps.map((t, i) => ({ time: new Date(t * 1000).toISOString().split('T')[0], open: parseFloat(quotes.open[i]), high: parseFloat(quotes.high[i]), low: parseFloat(quotes.low[i]), close: parseFloat(quotes.close[i]), value: parseFloat(quotes.volume[i]) })).filter(item => !isNaN(item.close) && item.close !== null); 
         cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
         salvarNoDisco();
         res.json({ ticker: ticker, historico: processados });
     } catch (erro) { 
-        console.log(`⚠️ Gráfico bloqueado. Tentando Proxy único...`);
-        try {
-            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-            const resProxy = await fetch(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            const dadosProxy = await resProxy.json();
-            const timestamps = dadosProxy.chart.result[0].timestamp;
-            const quotes = dadosProxy.chart.result[0].indicators.quote[0]; 
-            
-            const processados = timestamps.map((t, i) => ({
-                time: new Date(t * 1000).toISOString().split('T')[0], 
-                open: parseFloat(quotes.open[i]), high: parseFloat(quotes.high[i]), low: parseFloat(quotes.low[i]),
-                close: parseFloat(quotes.close[i]), value: parseFloat(quotes.volume[i]) 
-            })).filter(item => !isNaN(item.close) && item.close !== null); 
-            
-            cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
-            salvarNoDisco();
-            return res.json({ ticker: ticker, historico: processados });
-        } catch (erroProxy) {
-            if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
-            res.status(500).json({erro: `Erro histórico.`}); 
-        }
+        if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
+        res.status(500).json({erro: `Erro histórico.`}); 
     }
 });
 
-// ROTA 3: INDICADORES COMPLETOS (A ROLETA DE PROXIES DO MARCELO)
-app.get('/api/indicadores/:ticker', async (req, res) => {
+// ROTA 3: INDICADORES (AGORA É SOMENTE LEITURA - IMUNE A BLOQUEIOS)
+app.get('/api/indicadores/:ticker', (req, res) => {
     const ticker = req.params.ticker;
-    const agora = Date.now();
-    const VALIDADE_INDICADORES = 30 * 24 * 60 * 60 * 1000; 
-
-    if (cacheMemoria.indicadores[ticker] && (agora - cacheMemoria.indicadores[ticker].timestamp < VALIDADE_INDICADORES)) {
-        console.log(`⚡ Retornando Indicadores de ${ticker} direto do Disco!`);
+    
+    // O Render só olha para o disco rígido. Se tiver lá, ele manda pro site.
+    if (cacheMemoria.indicadores[ticker]) {
         return res.json(cacheMemoria.indicadores[ticker].dados);
     }
     
-    try {
-        // Tentativa 1: Oficial
-        const result = await yahooFinance.quoteSummary(ticker, {
-            modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData']
-        });
-
-        const dadosFormatados = formatarIndicadores(result);
-        cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
-        salvarNoDisco(); 
-        res.json(dadosFormatados);
-
-    } catch (erro) {
-        console.log(`⚠️ Indicadores de ${ticker} bloqueados. Iniciando Rotação de Proxies...`);
-        
-        const targetUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail,defaultKeyStatistics,financialData`;
-        
-        // A NOSSA MALA DE DISFARCES (3 servidores diferentes no mundo)
-        const listaProxies = [
-            `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
-            `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`
-        ];
-
-        let proxyFuncionou = false;
-
-        // Tenta um por um
-        for (let i = 0; i < listaProxies.length; i++) {
-            try {
-                console.log(`🕵️‍♂️ Tentando disfarce ${i + 1}...`);
-                const resProxy = await fetch(listaProxies[i], { headers: { 'User-Agent': 'Mozilla/5.0' }});
-                const dadosProxy = await resProxy.json();
-                
-                if (dadosProxy.quoteSummary && dadosProxy.quoteSummary.result) {
-                    const result = dadosProxy.quoteSummary.result[0];
-                    const dadosFormatados = formatarIndicadores(result);
-                    
-                    cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
-                    salvarNoDisco(); 
-                    console.log(`✅ Disfarce ${i + 1} funcionou para ${ticker}!`);
-                    
-                    proxyFuncionou = true;
-                    return res.json(dadosFormatados);
-                }
-            } catch (erroProxy) {
-                console.log(`❌ Disfarce ${i + 1} derrubado.`);
-            }
-        }
-
-        // Se o loop acabar e proxyFuncionou ainda for false, o FBI nos pegou kkkk
-        if (!proxyFuncionou) {
-            console.error(`🚨 Todos os proxies falharam para ${ticker}. Acionando Escudo Local.`);
-            if (cacheMemoria.indicadores[ticker]) {
-                return res.json(cacheMemoria.indicadores[ticker].dados);
-            }
-            res.json({ status: "bloqueado" }); 
-        }
-    }
+    // Se não tiver, ele avisa o site que o seu Robô precisa trabalhar
+    res.json({ status: "aguardando_robo" }); 
 });
 
-// Função auxiliar para deixar o código mais limpo
-function formatarIndicadores(result) {
-    const getVal = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj)?.raw || null;
-    return {
-        pl: getVal(result, 'summaryDetail.trailingPE') || result.summaryDetail?.trailingPE, 
-        pvp: getVal(result, 'defaultKeyStatistics.priceToBook') || result.defaultKeyStatistics?.priceToBook, 
-        dy: getVal(result, 'summaryDetail.dividendYield') || result.summaryDetail?.dividendYield,
-        pegRatio: getVal(result, 'defaultKeyStatistics.pegRatio') || result.defaultKeyStatistics?.pegRatio, 
-        evEbitda: getVal(result, 'defaultKeyStatistics.enterpriseToEbitda') || result.defaultKeyStatistics?.enterpriseToEbitda, 
-        vpa: getVal(result, 'defaultKeyStatistics.bookValue') || result.defaultKeyStatistics?.bookValue,
-        lpa: getVal(result, 'defaultKeyStatistics.trailingEps') || result.defaultKeyStatistics?.trailingEps, 
-        psr: getVal(result, 'summaryDetail.priceToSalesTrailing12Months') || result.summaryDetail?.priceToSalesTrailing12Months, 
-        roe: getVal(result, 'financialData.returnOnEquity') || result.financialData?.returnOnEquity,
-        roa: getVal(result, 'financialData.returnOnAssets') || result.financialData?.returnOnAssets, 
-        margemBruta: getVal(result, 'financialData.grossMargins') || result.financialData?.grossMargins, 
-        margemOperacional: getVal(result, 'financialData.operatingMargins') || result.financialData?.operatingMargins,
-        margemLiquida: getVal(result, 'financialData.profitMargins') || result.financialData?.profitMargins, 
-        dividaPL: getVal(result, 'financialData.debtToEquity') || result.financialData?.debtToEquity, 
-        liquidezCorrente: getVal(result, 'financialData.currentRatio') || result.financialData?.currentRatio
+// =========================================================================
+// ROTA MESTRA (PORTA DOS FUNDOS): POR AQUI O SEU COMPUTADOR MANDA OS DADOS
+// =========================================================================
+app.post('/api/abastecer-indicadores', (req, res) => {
+    const { senha, ticker, dados } = req.body;
+    
+    // Segurança: Só aceita pacotes se a senha for a nossa!
+    if (senha !== "ProjetoMarcelo2026") {
+        return res.status(401).json({ erro: "Acesso Negado. Senha incorreta." });
+    }
+
+    // Guarda os dados que vieram do seu computador na memória do Render
+    cacheMemoria.indicadores[ticker] = {
+        timestamp: Date.now(),
+        dados: dados
     };
-}
+    
+    salvarNoDisco(); // Tranca no cofre
+    console.log(`📦 PACOTE RECEBIDO DO ROBÔ: Indicadores de ${ticker} salvos com sucesso!`);
+    
+    res.json({ sucesso: true, mensagem: `${ticker} abastecido!` });
+});
 
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor Backend PRO na porta ${PORTA} (Com Roleta de Proxies)`));
+app.listen(PORTA, () => console.log(`✅ Servidor HÍBRIDO PRO na porta ${PORTA}!`));
