@@ -75,7 +75,6 @@ app.get('/api/historico/:ticker', async (req, res) => {
     const targetUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
     
     try {
-        // Tentativa 1: Normal
         const resposta = await fetch(targetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (!resposta.ok) throw new Error("Erro 429");
         const dados = await resposta.json();
@@ -92,9 +91,8 @@ app.get('/api/historico/:ticker', async (req, res) => {
         salvarNoDisco();
         res.json({ ticker: ticker, historico: processados });
     } catch (erro) { 
-        console.log(`⚠️ Gráfico de ${ticker} bloqueado. Tentando Proxy de Fuga...`);
+        console.log(`⚠️ Gráfico bloqueado. Tentando Proxy único...`);
         try {
-            // Tentativa 2: Proxy
             const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
             const resProxy = await fetch(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             const dadosProxy = await resProxy.json();
@@ -111,14 +109,13 @@ app.get('/api/historico/:ticker', async (req, res) => {
             salvarNoDisco();
             return res.json({ ticker: ticker, historico: processados });
         } catch (erroProxy) {
-            console.error(`❌ Proxy do gráfico também falhou para ${ticker}. Acionando Escudo.`);
             if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
             res.status(500).json({erro: `Erro histórico.`}); 
         }
     }
 });
 
-// ROTA 3: INDICADORES COMPLETOS (Validade: 30 DIAS)
+// ROTA 3: INDICADORES COMPLETOS (A ROLETA DE PROXIES DO MARCELO)
 app.get('/api/indicadores/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const agora = Date.now();
@@ -135,44 +132,51 @@ app.get('/api/indicadores/:ticker', async (req, res) => {
             modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData']
         });
 
-        const dadosFormatados = {
-            pl: result.summaryDetail?.trailingPE, pvp: result.defaultKeyStatistics?.priceToBook, dy: result.summaryDetail?.dividendYield,
-            pegRatio: result.defaultKeyStatistics?.pegRatio, evEbitda: result.defaultKeyStatistics?.enterpriseToEbitda, vpa: result.defaultKeyStatistics?.bookValue,
-            lpa: result.defaultKeyStatistics?.trailingEps, psr: result.summaryDetail?.priceToSalesTrailing12Months, roe: result.financialData?.returnOnEquity,
-            roa: result.financialData?.returnOnAssets, margemBruta: result.financialData?.grossMargins, margemOperacional: result.financialData?.operatingMargins,
-            margemLiquida: result.financialData?.profitMargins, dividaPL: result.financialData?.debtToEquity, liquidezCorrente: result.financialData?.currentRatio
-        };
-
+        const dadosFormatados = formatarIndicadores(result);
         cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
         salvarNoDisco(); 
         res.json(dadosFormatados);
 
     } catch (erro) {
-        console.log(`⚠️ Indicadores de ${ticker} bloqueados. Tentando Proxy de Fuga...`);
-        try {
-            // Tentativa 2: Proxy
-            const targetUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail,defaultKeyStatistics,financialData`;
-            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-            const resProxy = await fetch(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }});
-            const dadosProxy = await resProxy.json();
-            
-            const result = dadosProxy.quoteSummary.result[0];
-            const getVal = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj)?.raw || null;
+        console.log(`⚠️ Indicadores de ${ticker} bloqueados. Iniciando Rotação de Proxies...`);
+        
+        const targetUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail,defaultKeyStatistics,financialData`;
+        
+        // A NOSSA MALA DE DISFARCES (3 servidores diferentes no mundo)
+        const listaProxies = [
+            `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`
+        ];
 
-            const dadosFormatados = {
-                pl: getVal(result, 'summaryDetail.trailingPE'), pvp: getVal(result, 'defaultKeyStatistics.priceToBook'), dy: getVal(result, 'summaryDetail.dividendYield'),
-                pegRatio: getVal(result, 'defaultKeyStatistics.pegRatio'), evEbitda: getVal(result, 'defaultKeyStatistics.enterpriseToEbitda'), vpa: getVal(result, 'defaultKeyStatistics.bookValue'),
-                lpa: getVal(result, 'defaultKeyStatistics.trailingEps'), psr: getVal(result, 'summaryDetail.priceToSalesTrailing12Months'), roe: getVal(result, 'financialData.returnOnEquity'),
-                roa: getVal(result, 'financialData.returnOnAssets'), margemBruta: getVal(result, 'financialData.grossMargins'), margemOperacional: getVal(result, 'financialData.operatingMargins'),
-                margemLiquida: getVal(result, 'financialData.profitMargins'), dividaPL: getVal(result, 'financialData.debtToEquity'), liquidezCorrente: getVal(result, 'financialData.currentRatio')
-            };
+        let proxyFuncionou = false;
 
-            cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
-            salvarNoDisco(); 
-            return res.json(dadosFormatados);
+        // Tenta um por um
+        for (let i = 0; i < listaProxies.length; i++) {
+            try {
+                console.log(`🕵️‍♂️ Tentando disfarce ${i + 1}...`);
+                const resProxy = await fetch(listaProxies[i], { headers: { 'User-Agent': 'Mozilla/5.0' }});
+                const dadosProxy = await resProxy.json();
+                
+                if (dadosProxy.quoteSummary && dadosProxy.quoteSummary.result) {
+                    const result = dadosProxy.quoteSummary.result[0];
+                    const dadosFormatados = formatarIndicadores(result);
+                    
+                    cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
+                    salvarNoDisco(); 
+                    console.log(`✅ Disfarce ${i + 1} funcionou para ${ticker}!`);
+                    
+                    proxyFuncionou = true;
+                    return res.json(dadosFormatados);
+                }
+            } catch (erroProxy) {
+                console.log(`❌ Disfarce ${i + 1} derrubado.`);
+            }
+        }
 
-        } catch (erroProxy) {
-            console.error(`❌ Proxy também falhou para ${ticker}. Acionando Escudo.`);
+        // Se o loop acabar e proxyFuncionou ainda for false, o FBI nos pegou kkkk
+        if (!proxyFuncionou) {
+            console.error(`🚨 Todos os proxies falharam para ${ticker}. Acionando Escudo Local.`);
             if (cacheMemoria.indicadores[ticker]) {
                 return res.json(cacheMemoria.indicadores[ticker].dados);
             }
@@ -181,5 +185,27 @@ app.get('/api/indicadores/:ticker', async (req, res) => {
     }
 });
 
+// Função auxiliar para deixar o código mais limpo
+function formatarIndicadores(result) {
+    const getVal = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj)?.raw || null;
+    return {
+        pl: getVal(result, 'summaryDetail.trailingPE') || result.summaryDetail?.trailingPE, 
+        pvp: getVal(result, 'defaultKeyStatistics.priceToBook') || result.defaultKeyStatistics?.priceToBook, 
+        dy: getVal(result, 'summaryDetail.dividendYield') || result.summaryDetail?.dividendYield,
+        pegRatio: getVal(result, 'defaultKeyStatistics.pegRatio') || result.defaultKeyStatistics?.pegRatio, 
+        evEbitda: getVal(result, 'defaultKeyStatistics.enterpriseToEbitda') || result.defaultKeyStatistics?.enterpriseToEbitda, 
+        vpa: getVal(result, 'defaultKeyStatistics.bookValue') || result.defaultKeyStatistics?.bookValue,
+        lpa: getVal(result, 'defaultKeyStatistics.trailingEps') || result.defaultKeyStatistics?.trailingEps, 
+        psr: getVal(result, 'summaryDetail.priceToSalesTrailing12Months') || result.summaryDetail?.priceToSalesTrailing12Months, 
+        roe: getVal(result, 'financialData.returnOnEquity') || result.financialData?.returnOnEquity,
+        roa: getVal(result, 'financialData.returnOnAssets') || result.financialData?.returnOnAssets, 
+        margemBruta: getVal(result, 'financialData.grossMargins') || result.financialData?.grossMargins, 
+        margemOperacional: getVal(result, 'financialData.operatingMargins') || result.financialData?.operatingMargins,
+        margemLiquida: getVal(result, 'financialData.profitMargins') || result.financialData?.profitMargins, 
+        dividaPL: getVal(result, 'financialData.debtToEquity') || result.financialData?.debtToEquity, 
+        liquidezCorrente: getVal(result, 'financialData.currentRatio') || result.financialData?.currentRatio
+    };
+}
+
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor Backend PRO na porta ${PORTA} com Disco Rígido ativado!`));
+app.listen(PORTA, () => console.log(`✅ Servidor Backend PRO na porta ${PORTA} (Com Roleta de Proxies)`));
