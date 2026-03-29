@@ -39,6 +39,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
         try {
             const url = `https://query2.finance.yahoo.com/v8/finance/chart/${t}?range=1d&interval=1d`;
             const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (!resposta.ok) throw new Error("Erro 429");
             const dados = await resposta.json();
             const meta = dados.chart.result[0].meta;
             const resultado = { ticker: t, atual: meta.regularMarketPrice, fechamentoAnterior: meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice };
@@ -71,9 +72,12 @@ app.get('/api/historico/:ticker', async (req, res) => {
         return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
     }
 
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
+    const targetUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
+    
     try {
-        const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        // Tentativa 1: Normal
+        const resposta = await fetch(targetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!resposta.ok) throw new Error("Erro 429");
         const dados = await resposta.json();
         const timestamps = dados.chart.result[0].timestamp;
         const quotes = dados.chart.result[0].indicators.quote[0]; 
@@ -88,8 +92,29 @@ app.get('/api/historico/:ticker', async (req, res) => {
         salvarNoDisco();
         res.json({ ticker: ticker, historico: processados });
     } catch (erro) { 
-        if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
-        res.status(500).json({erro: `Erro histórico.`}); 
+        console.log(`⚠️ Gráfico de ${ticker} bloqueado. Tentando Proxy de Fuga...`);
+        try {
+            // Tentativa 2: Proxy
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+            const resProxy = await fetch(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const dadosProxy = await resProxy.json();
+            const timestamps = dadosProxy.chart.result[0].timestamp;
+            const quotes = dadosProxy.chart.result[0].indicators.quote[0]; 
+            
+            const processados = timestamps.map((t, i) => ({
+                time: new Date(t * 1000).toISOString().split('T')[0], 
+                open: parseFloat(quotes.open[i]), high: parseFloat(quotes.high[i]), low: parseFloat(quotes.low[i]),
+                close: parseFloat(quotes.close[i]), value: parseFloat(quotes.volume[i]) 
+            })).filter(item => !isNaN(item.close) && item.close !== null); 
+            
+            cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
+            salvarNoDisco();
+            return res.json({ ticker: ticker, historico: processados });
+        } catch (erroProxy) {
+            console.error(`❌ Proxy do gráfico também falhou para ${ticker}. Acionando Escudo.`);
+            if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
+            res.status(500).json({erro: `Erro histórico.`}); 
+        }
     }
 });
 
@@ -100,36 +125,22 @@ app.get('/api/indicadores/:ticker', async (req, res) => {
     const VALIDADE_INDICADORES = 30 * 24 * 60 * 60 * 1000; 
 
     if (cacheMemoria.indicadores[ticker] && (agora - cacheMemoria.indicadores[ticker].timestamp < VALIDADE_INDICADORES)) {
-        console.log(`⚡ Retornando Indicadores COMPLETOS de ${ticker} direto do Disco!`);
+        console.log(`⚡ Retornando Indicadores de ${ticker} direto do Disco!`);
         return res.json(cacheMemoria.indicadores[ticker].dados);
     }
     
     try {
+        // Tentativa 1: Oficial
         const result = await yahooFinance.quoteSummary(ticker, {
             modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData']
         });
 
-        // Extraindo a verdadeira avalanche de dados!
         const dadosFormatados = {
-            // Valuation
-            pl: result.summaryDetail?.trailingPE,
-            pvp: result.defaultKeyStatistics?.priceToBook,
-            dy: result.summaryDetail?.dividendYield,
-            pegRatio: result.defaultKeyStatistics?.pegRatio,
-            evEbitda: result.defaultKeyStatistics?.enterpriseToEbitda,
-            vpa: result.defaultKeyStatistics?.bookValue,
-            lpa: result.defaultKeyStatistics?.trailingEps,
-            psr: result.summaryDetail?.priceToSalesTrailing12Months,
-            // Rentabilidade
-            roe: result.financialData?.returnOnEquity,
-            roa: result.financialData?.returnOnAssets,
-            // Eficiência
-            margemBruta: result.financialData?.grossMargins,
-            margemOperacional: result.financialData?.operatingMargins,
-            margemLiquida: result.financialData?.profitMargins,
-            // Endividamento
-            dividaPL: result.financialData?.debtToEquity,
-            liquidezCorrente: result.financialData?.currentRatio
+            pl: result.summaryDetail?.trailingPE, pvp: result.defaultKeyStatistics?.priceToBook, dy: result.summaryDetail?.dividendYield,
+            pegRatio: result.defaultKeyStatistics?.pegRatio, evEbitda: result.defaultKeyStatistics?.enterpriseToEbitda, vpa: result.defaultKeyStatistics?.bookValue,
+            lpa: result.defaultKeyStatistics?.trailingEps, psr: result.summaryDetail?.priceToSalesTrailing12Months, roe: result.financialData?.returnOnEquity,
+            roa: result.financialData?.returnOnAssets, margemBruta: result.financialData?.grossMargins, margemOperacional: result.financialData?.operatingMargins,
+            margemLiquida: result.financialData?.profitMargins, dividaPL: result.financialData?.debtToEquity, liquidezCorrente: result.financialData?.currentRatio
         };
 
         cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
@@ -137,11 +148,36 @@ app.get('/api/indicadores/:ticker', async (req, res) => {
         res.json(dadosFormatados);
 
     } catch (erro) {
-        if (cacheMemoria.indicadores[ticker]) {
-            console.log(`🛡️ Escudo ativado! Dados antigos para ${ticker}.`);
-            return res.json(cacheMemoria.indicadores[ticker].dados);
+        console.log(`⚠️ Indicadores de ${ticker} bloqueados. Tentando Proxy de Fuga...`);
+        try {
+            // Tentativa 2: Proxy
+            const targetUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=summaryDetail,defaultKeyStatistics,financialData`;
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+            const resProxy = await fetch(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }});
+            const dadosProxy = await resProxy.json();
+            
+            const result = dadosProxy.quoteSummary.result[0];
+            const getVal = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj)?.raw || null;
+
+            const dadosFormatados = {
+                pl: getVal(result, 'summaryDetail.trailingPE'), pvp: getVal(result, 'defaultKeyStatistics.priceToBook'), dy: getVal(result, 'summaryDetail.dividendYield'),
+                pegRatio: getVal(result, 'defaultKeyStatistics.pegRatio'), evEbitda: getVal(result, 'defaultKeyStatistics.enterpriseToEbitda'), vpa: getVal(result, 'defaultKeyStatistics.bookValue'),
+                lpa: getVal(result, 'defaultKeyStatistics.trailingEps'), psr: getVal(result, 'summaryDetail.priceToSalesTrailing12Months'), roe: getVal(result, 'financialData.returnOnEquity'),
+                roa: getVal(result, 'financialData.returnOnAssets'), margemBruta: getVal(result, 'financialData.grossMargins'), margemOperacional: getVal(result, 'financialData.operatingMargins'),
+                margemLiquida: getVal(result, 'financialData.profitMargins'), dividaPL: getVal(result, 'financialData.debtToEquity'), liquidezCorrente: getVal(result, 'financialData.currentRatio')
+            };
+
+            cacheMemoria.indicadores[ticker] = { timestamp: agora, dados: dadosFormatados };
+            salvarNoDisco(); 
+            return res.json(dadosFormatados);
+
+        } catch (erroProxy) {
+            console.error(`❌ Proxy também falhou para ${ticker}. Acionando Escudo.`);
+            if (cacheMemoria.indicadores[ticker]) {
+                return res.json(cacheMemoria.indicadores[ticker].dados);
+            }
+            res.json({ status: "bloqueado" }); 
         }
-        res.json({ status: "bloqueado" }); 
     }
 });
 
