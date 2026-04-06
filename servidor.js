@@ -3,7 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import yahooFinance from 'yahoo-finance2'; // 🛡️ A CHAVE MESTRA DO YAHOO
+import YahooFinance from 'yahoo-finance2'; // 🛡️ Importação correta
+
+// 🔑 A CHAVE DE IGNIÇÃO QUE FALTAVA (Igual ao seu robo.js!)
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const app = express();
 app.use(cors());
