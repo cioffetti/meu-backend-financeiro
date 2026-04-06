@@ -9,9 +9,6 @@ const app = express();
 app.use(cors());
 app.use(express.json()); 
 
-// Silencia os avisos chatos do Yahoo no log
-yahooFinance.suppressNotices(['yahooSurvey']);
-
 // 1. CONFIGURAÇÃO DA INTELIGÊNCIA ARTIFICIAL (GEMINI)
 const CHAVE_GEMINI = process.env.CHAVE_GEMINI;
 const genAI = new GoogleGenerativeAI(CHAVE_GEMINI);
