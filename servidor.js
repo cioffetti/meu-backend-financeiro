@@ -5,7 +5,7 @@ import fs from 'fs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import YahooFinance from 'yahoo-finance2'; // 🛡️ Importação correta
 
-// 🔑 A CHAVE DE IGNIÇÃO QUE FALTAVA (Igual ao seu robo.js!)
+// 🔑 A CHAVE DE IGNIÇÃO 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const app = express();
@@ -36,7 +36,18 @@ function salvarNoDisco() {
     catch (e) { console.error("Erro ao salvar no disco."); }
 }
 
-// ROTA 1: Cotações em Lote (AGORA BLINDADA PELO YAHOO-FINANCE2)
+// ⏳ TRADUTOR DE TEMPO PARA O YAHOO V3
+function calcularDataInicio(range) {
+    const data = new Date();
+    if (range === '1mo') data.setMonth(data.getMonth() - 1);
+    else if (range === '6mo') data.setMonth(data.getMonth() - 6);
+    else if (range === '1y') data.setFullYear(data.getFullYear() - 1);
+    else if (range === '5y') data.setFullYear(data.getFullYear() - 5);
+    else data.setMonth(data.getMonth() - 1); // fallback de 1 mês
+    return data.toISOString().split('T')[0]; // Retorna YYYY-MM-DD
+}
+
+// ROTA 1: Cotações em Lote 
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -67,7 +78,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     res.json(respostaFinal);
 });
 
-// ROTA 2: Histórico para Gráficos (ADEUS PROXIES, OLÁ ESTABILIDADE)
+// ROTA 2: Histórico para Gráficos
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -81,7 +92,9 @@ app.get('/api/historico/:ticker', async (req, res) => {
 
     try {
         console.log(`📊 Baixando histórico de ${ticker} via YahooFinance2...`);
-        const result = await yahooFinance.chart(ticker, { range: range, interval: interval });
+        const period1 = calcularDataInicio(range); // Traduz a palavra para data exata
+        
+        const result = await yahooFinance.chart(ticker, { period1: period1, interval: interval });
         
         const processados = result.quotes
             .filter(q => q.close !== null && !isNaN(q.close))
@@ -100,14 +113,14 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 });
 
-// 🚀 NOVA ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (IA) COM DADOS BLINDADOS
+// 🚀 NOVA ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (IA)
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     console.log(`🎯 [IA] Gerando Análise Técnica em tempo real para: ${ticker}`);
 
     try {
-        // 1. Busca os últimos 6 meses usando a biblioteca oficial
-        const result = await yahooFinance.chart(ticker, { range: '6mo', interval: '1d' });
+        const period1 = calcularDataInicio('6mo'); // Pede os últimos 6 meses cravados
+        const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
         
         const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
         
