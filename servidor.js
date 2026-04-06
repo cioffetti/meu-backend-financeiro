@@ -3,10 +3,14 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import yahooFinance from 'yahoo-finance2'; // 🛡️ A CHAVE MESTRA DO YAHOO
 
 const app = express();
 app.use(cors());
 app.use(express.json()); 
+
+// Silencia os avisos chatos do Yahoo no log
+yahooFinance.suppressNotices(['yahooSurvey']);
 
 // 1. CONFIGURAÇÃO DA INTELIGÊNCIA ARTIFICIAL (GEMINI)
 const CHAVE_GEMINI = process.env.CHAVE_GEMINI;
@@ -32,7 +36,7 @@ function salvarNoDisco() {
     catch (e) { console.error("Erro ao salvar no disco."); }
 }
 
-// ROTA 1: Cotações em Lote
+// ROTA 1: Cotações em Lote (AGORA BLINDADA PELO YAHOO-FINANCE2)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -42,15 +46,18 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     const fetchTicker = async (t) => {
         if (cacheMemoria.cotacoes[t] && (agora - cacheMemoria.cotacoes[t].timestamp < 300000)) return cacheMemoria.cotacoes[t].dados;
         try {
-            const url = `https://query2.finance.yahoo.com/v8/finance/chart/${t}?range=1d&interval=1d`;
-            const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            if (!resposta.ok) throw new Error("Erro");
-            const dados = await resposta.json();
-            const meta = dados.chart.result[0].meta;
-            const resultado = { ticker: t, atual: meta.regularMarketPrice, fechamentoAnterior: meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice };
+            const result = await yahooFinance.quote(t);
+            const resultado = { 
+                ticker: t, 
+                atual: result.regularMarketPrice, 
+                fechamentoAnterior: result.regularMarketPreviousClose || result.regularMarketPrice 
+            };
             cacheMemoria.cotacoes[t] = { timestamp: agora, dados: resultado };
             return resultado;
-        } catch (e) { return cacheMemoria.cotacoes[t] ? cacheMemoria.cotacoes[t].dados : null; }
+        } catch (e) { 
+            console.log(`Aviso: Cotação falhou para ${t}`);
+            return cacheMemoria.cotacoes[t] ? cacheMemoria.cotacoes[t].dados : null; 
+        }
     };
 
     const results = await Promise.all(tickers.map(t => fetchTicker(t)));
@@ -60,7 +67,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     res.json(respostaFinal);
 });
 
-// ROTA 2: Histórico para Gráficos
+// ROTA 2: Histórico para Gráficos (ADEUS PROXIES, OLÁ ESTABILIDADE)
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -72,50 +79,41 @@ app.get('/api/historico/:ticker', async (req, res) => {
         return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
     }
 
-    const targetUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
-    const listaUrls = [
-        { nome: 'Oficial', url: targetUrl },
-        { nome: 'Proxy 1', url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}` },
-        { nome: 'Proxy 2', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}` }
-    ];
-
-    for (let tentativa of listaUrls) {
-        try {
-            const resposta = await fetch(tentativa.url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
-            const dados = await resposta.json();
-            const timestamps = dados.chart.result[0].timestamp;
-            const quotes = dados.chart.result[0].indicators.quote[0]; 
-            const processados = timestamps.map((t, i) => ({ 
-                time: new Date(t * 1000).toISOString().split('T')[0], 
-                close: parseFloat(quotes.close[i])
-            })).filter(item => !isNaN(item.close)); 
+    try {
+        console.log(`📊 Baixando histórico de ${ticker} via YahooFinance2...`);
+        const result = await yahooFinance.chart(ticker, { range: range, interval: interval });
+        
+        const processados = result.quotes
+            .filter(q => q.close !== null && !isNaN(q.close))
+            .map(q => ({ 
+                time: q.date.toISOString().split('T')[0], 
+                close: parseFloat(q.close)
+            }));
             
-            cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
-            salvarNoDisco();
-            return res.json({ ticker: ticker, historico: processados });
-        } catch (erro) { console.log(`Erro na tentativa ${tentativa.nome}: ${erro.message}`); }
+        cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
+        salvarNoDisco();
+        return res.json({ ticker: ticker, historico: processados });
+    } catch (erro) { 
+        console.log(`❌ Erro no gráfico de ${ticker}: ${erro.message}`); 
+        if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
+        res.status(500).json({erro: `Erro ao buscar histórico.`}); 
     }
-    res.status(500).json({erro: `Erro ao buscar histórico.`}); 
 });
 
-// 🚀 NOVA ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (IA)
+// 🚀 NOVA ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (IA) COM DADOS BLINDADOS
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     console.log(`🎯 [IA] Gerando Análise Técnica em tempo real para: ${ticker}`);
 
     try {
-        // 1. Busca os últimos 6 meses de dados para a IA analisar
-        const urlDados = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=6mo&interval=1d`;
-        const respYahoo = await fetch(urlDados, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        const dadosYahoo = await respYahoo.json();
+        // 1. Busca os últimos 6 meses usando a biblioteca oficial
+        const result = await yahooFinance.chart(ticker, { range: '6mo', interval: '1d' });
         
-        const timestamps = dadosYahoo.chart.result[0].timestamp;
-        const prices = dadosYahoo.chart.result[0].indicators.quote[0].close;
+        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
         
         // Limpa os dados para economizar tokens (pega um preço a cada 3 dias)
-        const resumoPrecos = timestamps.filter((_, i) => i % 3 === 0).map((t, i) => {
-            return `${new Date(t * 1000).toISOString().split('T')[0]}: ${prices[i]?.toFixed(2)}`;
+        const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => {
+            return `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`;
         }).join(', ');
 
         // 2. Prepara o prompt para o Gemini
