@@ -47,34 +47,51 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; // Retorna YYYY-MM-DD
 }
 
-// ROTA 1: Cotações em Lote 
+// 🚀 ROTA 1: Cotações em Lote (AGORA COM BUSCA EM LOTE NATIVA DO YAHOO)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
     const tickers = tickersStr.split(',');
     const agora = Date.now();
     
-    const fetchTicker = async (t) => {
-        if (cacheMemoria.cotacoes[t] && (agora - cacheMemoria.cotacoes[t].timestamp < 300000)) return cacheMemoria.cotacoes[t].dados;
-        try {
-            const result = await yahooFinance.quote(t);
-            const resultado = { 
-                ticker: t, 
-                atual: result.regularMarketPrice, 
-                fechamentoAnterior: result.regularMarketPreviousClose || result.regularMarketPrice 
-            };
-            cacheMemoria.cotacoes[t] = { timestamp: agora, dados: resultado };
-            return resultado;
-        } catch (e) { 
-            console.log(`Aviso: Cotação falhou para ${t}`);
-            return cacheMemoria.cotacoes[t] ? cacheMemoria.cotacoes[t].dados : null; 
-        }
-    };
+    // Filtra quais ativos realmente precisam de atualização (cache mais velho que 5 min)
+    const tickersParaAtualizar = tickers.filter(t => !cacheMemoria.cotacoes[t] || (agora - cacheMemoria.cotacoes[t].timestamp >= 300000));
 
-    const results = await Promise.all(tickers.map(t => fetchTicker(t)));
-    salvarNoDisco(); 
+    if (tickersParaAtualizar.length > 0) {
+        try {
+            console.log(`🔄 Buscando cotações em lote VIP para ${tickersParaAtualizar.length} ativos...`);
+            // O segredo de ouro: Passar a lista toda de uma vez para o Yahoo!
+            const resultadosApi = await yahooFinance.quote(tickersParaAtualizar);
+            
+            // Garante que é array (se for só 1 ticker, a biblioteca retorna um objeto simples)
+            const resultadosArray = Array.isArray(resultadosApi) ? resultadosApi : [resultadosApi];
+
+            resultadosArray.forEach(item => {
+                if (item && item.symbol) {
+                    cacheMemoria.cotacoes[item.symbol] = {
+                        timestamp: agora,
+                        dados: {
+                            ticker: item.symbol,
+                            atual: item.regularMarketPrice,
+                            fechamentoAnterior: item.regularMarketPreviousClose || item.regularMarketPrice
+                        }
+                    };
+                }
+            });
+            salvarNoDisco();
+        } catch (e) {
+            console.log(`❌ Erro na busca em lote: ${e.message}`);
+        }
+    }
+
+    // Monta o pacote de resposta juntando o que atualizou com o que estava no cache
     const respostaFinal = {};
-    results.forEach(r => { if(r) respostaFinal[r.ticker] = { atual: r.atual, fechamentoAnterior: r.fechamentoAnterior }; });
+    tickers.forEach(t => {
+        if (cacheMemoria.cotacoes[t]) {
+            respostaFinal[t] = cacheMemoria.cotacoes[t].dados;
+        }
+    });
+
     res.json(respostaFinal);
 });
 
