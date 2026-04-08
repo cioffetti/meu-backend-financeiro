@@ -6,18 +6,22 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import yahooFinance from 'yahoo-finance2'; 
 
 // 🛡️ TRUQUE ANTI-429 PARA O RENDER (O Disfarce de Navegador)
-yahooFinance.suppressNotices(['yahooSurvey']);
-yahooFinance.setGlobalConfig({
-    requestOptions: {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive'
+// (Removemos o suppressNotices que causou a fúria do servidor)
+try {
+    yahooFinance.setGlobalConfig({
+        requestOptions: {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive'
+            }
         }
-    }
-});
+    });
+} catch (e) {
+    console.log("Aviso: Não foi possível aplicar o disfarce, seguindo padrão...");
+}
 
 const app = express();
 app.use(cors());
@@ -155,4 +159,3 @@ app.get('/api/analise-ri/:ticker', (req, res) => {
 
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => console.log(`✅ Servidor ESTÁVEL PRO na porta ${PORTA}!`));
-// Acorda Render!
