@@ -3,16 +3,15 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import yahooFinance from 'yahoo-finance2'; // A importação correta que você pontuou!
+import yahooFinance from 'yahoo-finance2'; 
 
-// Suprime apenas o aviso de pesquisa, sem quebrar a biblioteca
 yahooFinance.suppressNotices(['yahooSurvey']);
 
 const app = express();
 app.use(cors());
 app.use(express.json()); 
 
-// CONFIGURAÇÃO DA IA (GEMINI)
+// 1. CONFIGURAÇÃO DA IA (GEMINI)
 const CHAVE_GEMINI = process.env.CHAVE_GEMINI;
 const genAI = new GoogleGenerativeAI(CHAVE_GEMINI);
 const modeloIA = genAI.getGenerativeModel({ 
@@ -31,17 +30,23 @@ function salvarNoDisco() {
     try { fs.writeFileSync(ARQUIVO_CACHE, JSON.stringify(cacheMemoria), 'utf8'); } catch (e) {}
 }
 
-function calcularDataInicio(range) {
-    const data = new Date();
-    if (range === '1mo') data.setMonth(data.getMonth() - 1);
-    else if (range === '6mo') data.setMonth(data.getMonth() - 6);
-    else if (range === '1y') data.setFullYear(data.getFullYear() - 1);
-    else if (range === '5y') data.setFullYear(data.getFullYear() - 5);
-    else data.setMonth(data.getMonth() - 1); 
-    return data.toISOString().split('T')[0]; 
+// 🛡️ A PORTA LATERAL DO DIRETOR (Fallback Nativo via Web)
+// Se a biblioteca oficial for bloqueada, usamos o protocolo puro do navegador
+async function buscarPrecoPeloGrafico(ticker) {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=2d&interval=1d`;
+    const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!resposta.ok) throw new Error('Falha no fallback nativo');
+    
+    const dados = await resposta.json();
+    const meta = dados.chart.result[0].meta;
+    
+    return {
+        atual: meta.regularMarketPrice,
+        fechamentoAnterior: meta.chartPreviousClose || meta.previousClose || meta.regularMarketPrice
+    };
 }
 
-// 🚀 ROTA 1: Cotações em Lote (Rápida e Estável)
+// 🚀 ROTA 1: Cotações em Lote (Com Fracionamento e Fallback)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -50,28 +55,44 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     
     const tickersParaAtualizar = tickers.filter(t => !cacheMemoria.cotacoes[t] || (agora - cacheMemoria.cotacoes[t].timestamp >= 300000));
 
-    if (tickersParaAtualizar.length > 0) {
+    // FRACIONAMENTO: Divide os 80 ativos em pacotes de 20 para não assustar o Yahoo
+    const lotes = [];
+    for (let i = 0; i < tickersParaAtualizar.length; i += 20) {
+        lotes.push(tickersParaAtualizar.slice(i, i + 20));
+    }
+
+    for (const lote of lotes) {
         try {
-            const resultadosApi = await yahooFinance.quote(tickersParaAtualizar);
+            // Tenta a porta da frente oficial
+            const resultadosApi = await yahooFinance.quote(lote);
             const resultadosArray = Array.isArray(resultadosApi) ? resultadosApi : [resultadosApi];
 
             resultadosArray.forEach(item => {
                 if (item && item.symbol) {
                     cacheMemoria.cotacoes[item.symbol] = {
                         timestamp: agora,
-                        dados: {
-                            ticker: item.symbol,
-                            atual: item.regularMarketPrice,
-                            fechamentoAnterior: item.regularMarketPreviousClose || item.regularMarketPrice
-                        }
+                        dados: { ticker: item.symbol, atual: item.regularMarketPrice, fechamentoAnterior: item.regularMarketPreviousClose || item.regularMarketPrice }
                     };
                 }
             });
-            salvarNoDisco();
         } catch (e) {
-            console.log(`❌ Erro na API do Yahoo: ${e.message}`);
+            console.log(`⚠️ Lote bloqueado (429). Ativando Porta Lateral para os ativos...`);
+            // O SEU ARRANJO: Se a cotação falhar, entra pela porta do gráfico um por um!
+            for (const t of lote) {
+                try {
+                    const precos = await buscarPrecoPeloGrafico(t);
+                    cacheMemoria.cotacoes[t] = {
+                        timestamp: agora,
+                        dados: { ticker: t, atual: precos.atual, fechamentoAnterior: precos.fechamentoAnterior }
+                    };
+                } catch (err) {
+                    console.log(`Falha dupla no ativo ${t}`);
+                }
+            }
         }
     }
+    
+    if (tickersParaAtualizar.length > 0) salvarNoDisco();
 
     const respostaFinal = {};
     tickers.forEach(t => {
@@ -83,7 +104,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     res.json(respostaFinal);
 });
 
-// 📊 ROTA 2: Histórico para Gráficos
+// 📊 ROTA 2: Histórico para Gráficos (Com Fallback)
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -96,12 +117,26 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 
     try {
-        const period1 = calcularDataInicio(range); 
-        const result = await yahooFinance.chart(ticker, { period1: period1, interval: interval });
-        
-        const processados = result.quotes
-            .filter(q => q.close !== null && !isNaN(q.close))
-            .map(q => ({ time: q.date.toISOString().split('T')[0], close: parseFloat(q.close) }));
+        let processados = [];
+        try {
+            // Tentativa Oficial
+            const period1 = new Date(); period1.setMonth(period1.getMonth() - (range === '6mo' ? 6 : 1));
+            const result = await yahooFinance.chart(ticker, { period1: period1.toISOString().split('T')[0], interval: interval });
+            processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close)).map(q => ({ time: q.date.toISOString().split('T')[0], close: parseFloat(q.close) }));
+        } catch (e) {
+            // Tentativa via Porta Lateral
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
+            const resposta = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const dados = await resposta.json();
+            const timestamps = dados.chart.result[0].timestamp;
+            const quotes = dados.chart.result[0].indicators.quote[0];
+            
+            for(let i=0; i<timestamps.length; i++){
+                if(quotes.close[i] !== null) {
+                    processados.push({ time: new Date(timestamps[i] * 1000).toISOString().split('T')[0], close: parseFloat(quotes.close[i]) });
+                }
+            }
+        }
             
         cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
         salvarNoDisco();
@@ -112,12 +147,12 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 });
 
-// 🎯 ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (A que usa as suas cotas com sucesso)
+// 🎯 ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (Intacta, funcionando perfeitamente)
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     try {
-        const period1 = calcularDataInicio('6mo'); 
-        const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
+        const period1 = new Date(); period1.setMonth(period1.getMonth() - 6);
+        const result = await yahooFinance.chart(ticker, { period1: period1.toISOString().split('T')[0], interval: '1d' });
         
         const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
         const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`).join(', ');
@@ -129,9 +164,9 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
         const resultado = await modeloIA.generateContent(prompt);
         res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
     } catch (erro) {
-        res.status(500).json({ erro: "Erro na IA." });
+        res.status(500).json({ erro: "Erro na IA ou Bloqueio 429." });
     }
 });
 
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor ESTÁVEL na porta ${PORTA}!`));
+app.listen(PORTA, () => console.log(`✅ Servidor BLINDADO PRO na porta ${PORTA}!`));
