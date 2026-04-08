@@ -124,27 +124,52 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     } catch (erro) { res.status(500).json({ erro: "Erro na IA." }); }
 });
 
-// 🚀 NOVA ROTA 4: RADAR DE RI E NOTÍCIAS ON-DEMAND (IA)
+// 🚀 NOVA ROTA 4: RADAR CORPORATIVO E DE FUNDAMENTOS (RI) DA IA
 app.get('/api/analise-ri/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
-    console.log(`📰 [IA] Lendo Radar e RI para: ${ticker}`);
+    console.log(`💼 [IA] Lendo Balanço Corporativo (RI) para: ${ticker}`);
 
     try {
-        // 1. Busca manchetes reais para dar contexto de mercado
-        const searchResult = await yahooFinance.search(ticker);
-        const noticias = (searchResult.news && searchResult.news.length > 0) 
-            ? searchResult.news.map(n => n.title).slice(0, 5).join(' | ') 
-            : 'Sem notícias recentes relevantes.';
+        // 1. Extrai a "Matemática Fria" do Balanço
+        const resultYahoo = await yahooFinance.quoteSummary(ticker, { 
+            modules: ['financialData', 'defaultKeyStatistics'] 
+        });
 
-        // 2. Prepara o prompt do Analista Fundamentalista
-        const prompt = `Aja como um Analista Fundamentalista Sênior. Você está analisando a empresa ${ticker}.
-        Considere o atual cenário do mercado e as seguintes manchetes financeiras recentes sobre ela: [${noticias}].
-        Faça um resumo direto e objetivo apontando os 3 principais Prós (Forças/Oportunidades do balanço ou mercado) e os 3 principais Contras (Riscos/Fraquezas/Desafios).
+        const fin = resultYahoo.financialData || {};
+        
+        const formataDinheiro = (val) => val ? (val / 1000000).toFixed(2) + ' Milhões' : 'N/A';
+
+        const dossie = `
+        DADOS OFICIAIS DO ÚLTIMO BALANÇO:
+        Receita Total: ${formataDinheiro(fin.totalRevenue)}
+        EBITDA: ${formataDinheiro(fin.ebitda)}
+        Lucro/Prejuízo: ${formataDinheiro(fin.netIncomeToCommon)}
+        Caixa Total: ${formataDinheiro(fin.totalCash)}
+        Dívida Total: ${formataDinheiro(fin.totalDebt)}
+        Livre Geração de Caixa (FCF): ${formataDinheiro(fin.freeCashflow)}
+        Margem Líquida: ${fin.profitMargins ? (fin.profitMargins * 100).toFixed(2) + '%' : 'N/A'}
+        ROE: ${fin.returnOnEquity ? (fin.returnOnEquity * 100).toFixed(2) + '%' : 'N/A'}
+        Crescimento Trimestral da Receita: ${fin.revenueGrowth ? (fin.revenueGrowth * 100).toFixed(2) + '%' : 'N/A'}
+        Crescimento Trimestral do Lucro: ${fin.earningsGrowth ? (fin.earningsGrowth * 100).toFixed(2) + '%' : 'N/A'}
+        `;
+
+        // 2. Novo Prompt: Postura de Auditor Contábil
+        const prompt = `Você é um Auditor Contábil e Analista Fundamentalista Sênior. 
+        Sua tarefa é ler EXCLUSIVAMENTE os números oficiais do último balanço da empresa ${ticker} listados abaixo:
+        
+        ${dossie}
+
+        REGRA DE OURO: É estritamente PROIBIDO mencionar notícias de juros, macroeconomia, fofocas de mercado ou contexto político. Baseie sua resposta APENAS na matemática apresentada acima.
+
+        Faça uma leitura técnica contábil apontando:
+        - Os 3 principais PRÓS FINANCEIROS (Ex: Margens altas, crescimento forte da receita/lucro, caixa livre positivo).
+        - Os 3 principais CONTRAS FINANCEIROS (Ex: Alavancagem pesada, queda no lucro, queima de caixa livre).
+
         Retorne APENAS um JSON estrito no formato:
         {
           "ticker": "${ticker}",
-          "pros": ["Pro 1", "Pro 2", "Pro 3"],
-          "contras": ["Contra 1", "Contra 2", "Contra 3"]
+          "pros": ["Pro contábil 1", "Pro contábil 2", "Pro contábil 3"],
+          "contras": ["Contra de risco 1", "Contra de risco 2", "Contra de risco 3"]
         }`;
 
         // 3. IA mastiga e devolve o JSON limpo
