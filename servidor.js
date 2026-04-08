@@ -3,14 +3,27 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import YahooFinance from 'yahoo-finance2'; 
+import yahooFinance from 'yahoo-finance2'; 
 
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+// 🛡️ TRUQUE ANTI-429 PARA O RENDER (O Disfarce de Navegador)
+yahooFinance.suppressNotices(['yahooSurvey']);
+yahooFinance.setGlobalConfig({
+    requestOptions: {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive'
+        }
+    }
+});
 
 const app = express();
 app.use(cors());
 app.use(express.json()); 
 
+// 1. CONFIGURAÇÃO DA IA (GEMINI)
 const CHAVE_GEMINI = process.env.CHAVE_GEMINI;
 const genAI = new GoogleGenerativeAI(CHAVE_GEMINI);
 const modeloIA = genAI.getGenerativeModel({ 
@@ -39,7 +52,7 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; 
 }
 
-// 🚀 ROTA 1: Cotações em Lote VIP (A versão pura, rápida e que funcionava)
+// 🚀 ROTA 1: Cotações em Lote (A versão pura, rápida e estável)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -67,7 +80,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
             });
             salvarNoDisco();
         } catch (e) {
-            console.log(`❌ Erro na API do Yahoo (Possível 429): ${e.message}`);
+            console.log(`❌ Erro na API do Yahoo: ${e.message}`);
         }
     }
 
@@ -131,5 +144,14 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     }
 });
 
+// 📰 ROTA 4: RADAR CORPORATIVO (MOCK TEMPORÁRIO PARA NÃO QUEBRAR O BOTÃO DO FRONT)
+app.get('/api/analise-ri/:ticker', (req, res) => {
+    res.json({
+        ticker: req.params.ticker,
+        pros: ["Aguardando atualização do Robô (Madrugada)...", "-", "-"],
+        contras: ["Aguardando atualização do Robô (Madrugada)...", "-", "-"]
+    });
+});
+
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor HÍBRIDO PRO na porta ${PORTA}!`));
+app.listen(PORTA, () => console.log(`✅ Servidor ESTÁVEL PRO na porta ${PORTA}!`));
