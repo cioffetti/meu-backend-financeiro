@@ -6,7 +6,6 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import YahooFinance from 'yahoo-finance2'; 
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
-
 const app = express();
 app.use(cors());
 app.use(express.json()); 
@@ -17,14 +16,13 @@ const modeloIA = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generatio
 
 const ARQUIVO_CACHE = './banco_de_dados.json';
 let cacheMemoria = { cotacoes: {}, historico: {} };
+let dbEstatico = {}; // O Cofre
 
-if (fs.existsSync(ARQUIVO_CACHE)) {
-    try { cacheMemoria = JSON.parse(fs.readFileSync(ARQUIVO_CACHE, 'utf8')); } catch (e) { }
-}
+// Tenta carregar o cofre logo que liga
+try { if (fs.existsSync('./indicadores.json')) dbEstatico = JSON.parse(fs.readFileSync('./indicadores.json', 'utf8')); } catch(e) {}
+if (fs.existsSync(ARQUIVO_CACHE)) { try { cacheMemoria = JSON.parse(fs.readFileSync(ARQUIVO_CACHE, 'utf8')); } catch(e){} }
 
-function salvarNoDisco() {
-    try { fs.writeFileSync(ARQUIVO_CACHE, JSON.stringify(cacheMemoria), 'utf8'); } catch (e) { }
-}
+function salvarNoDisco() { try { fs.writeFileSync(ARQUIVO_CACHE, JSON.stringify(cacheMemoria), 'utf8'); } catch(e){} }
 
 function calcularDataInicio(range) {
     const data = new Date();
@@ -36,7 +34,7 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; 
 }
 
-// ROTA 1: Cotações em Lote (Lote VIP Original - Rápido)
+// 🛡️ ROTA 1: Cotações (A PROVA DE 429)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -55,7 +53,15 @@ app.get('/api/cotacoes-lote', async (req, res) => {
                 }
             });
             salvarNoDisco();
-        } catch (e) { console.log(`Aviso: Yahoo limitou cotações (429). Retornando cache existente.`); }
+        } catch (e) { 
+            console.log(`⚠️ Yahoo deu 429. Puxando cotações do Cofre de Segurança!`);
+            // Se der erro, pega o preço antigo que o robô salvou para não travar a tela!
+            tickersParaAtualizar.forEach(t => {
+                if(dbEstatico[t] && dbEstatico[t].precoAtual) {
+                    cacheMemoria.cotacoes[t] = { timestamp: agora, dados: { ticker: t, atual: dbEstatico[t].precoAtual, fechamentoAnterior: dbEstatico[t].precoAtual } };
+                }
+            });
+        }
     }
 
     const respostaFinal = {};
@@ -63,7 +69,6 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     res.json(respostaFinal);
 });
 
-// ROTA 2: Histórico (Direto e Rápido)
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -71,9 +76,7 @@ app.get('/api/historico/:ticker', async (req, res) => {
     const chave = `${ticker}-${range}`; 
     const agora = Date.now();
 
-    if (cacheMemoria.historico[chave] && (agora - cacheMemoria.historico[chave].timestamp < 3600000)) {
-        return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
-    }
+    if (cacheMemoria.historico[chave] && (agora - cacheMemoria.historico[chave].timestamp < 3600000)) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
 
     try {
         const period1 = calcularDataInicio(range); 
@@ -88,7 +91,6 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 });
 
-// ROTA 3: ANÁLISE GRÁFICA IA
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     try {
@@ -103,37 +105,7 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
 
         const resultado = await modeloIA.generateContent(prompt);
         res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
-    } catch (erro) { res.status(500).json({ erro: "Yahoo bloqueou os dados (Erro 429). Tente novamente mais tarde." }); }
-});
-
-// ROTA 4: RADAR CORPORATIVO (RI) IA - SEM FALSIFICAÇÕES
-app.get('/api/analise-ri/:ticker', async (req, res) => {
-    const ticker = req.params.ticker;
-    try {
-        const resultYahoo = await yahooFinance.quoteSummary(ticker, { modules: ['financialData'] });
-        const fin = resultYahoo.financialData || {};
-        const formataDinheiro = (val) => val ? (val / 1000000).toFixed(2) + ' Milhões' : 'N/A';
-
-        const dossie = `
-        Receita Total: ${formataDinheiro(fin.totalRevenue)} | EBITDA: ${formataDinheiro(fin.ebitda)} | Lucro: ${formataDinheiro(fin.netIncomeToCommon)}
-        Caixa Total: ${formataDinheiro(fin.totalCash)} | Dívida Total: ${formataDinheiro(fin.totalDebt)} | FCF: ${formataDinheiro(fin.freeCashflow)}
-        Margem Líquida: ${fin.profitMargins ? (fin.profitMargins * 100).toFixed(2) + '%' : 'N/A'}
-        ROE: ${fin.returnOnEquity ? (fin.returnOnEquity * 100).toFixed(2) + '%' : 'N/A'}
-        Crescimento Trim. Receita: ${fin.revenueGrowth ? (fin.revenueGrowth * 100).toFixed(2) + '%' : 'N/A'}
-        `;
-
-        const prompt = `Você é um Auditor Contábil Sênior. Leia EXCLUSIVAMENTE os números corporativos de ${ticker}:
-        [${dossie}]
-        É estritamente PROIBIDO mencionar macroeconomia ou notícias. Baseie-se APENAS na matemática acima.
-        Aponte 3 PRÓS FINANCEIROS e 3 CONTRAS FINANCEIROS reais contábeis.
-        Retorne JSON estrito: { "ticker": "${ticker}", "pros": ["...", "...", "..."], "contras": ["...", "...", "..."] }`;
-
-        const resultado = await modeloIA.generateContent(prompt);
-        res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
-    } catch (erro) {
-        // Se o Yahoo der 429, nós simplesmente avisamos o Front-end para ele exibir a mensagem elegante.
-        res.status(500).json({ erro: "O Servidor do Yahoo limitou os acessos temporariamente (Erro 429). Aguarde alguns minutos e tente novamente." });
-    }
+    } catch (erro) { res.status(500).json({ erro: "O Gráfico não tem dados recentes para a IA ler." }); }
 });
 
 const PORTA = process.env.PORT || 3000;
