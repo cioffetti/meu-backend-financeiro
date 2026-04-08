@@ -3,30 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import yahooFinance from 'yahoo-finance2'; // A importação correta que você pontuou!
 
-// 1. IMPORTAÇÃO CORRETA (Você tinha toda razão!)
-import YahooFinance from 'yahoo-finance2'; 
-
-// 2. A CHAVE DE IGNIÇÃO (Obrigatório na nova versão)
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
-
-// 3. 🛡️ TRUQUE ANTI-429 PARA O RENDER (O Disfarce de Navegador Windows/Chrome)
-try {
-    yahooFinance.setGlobalConfig({
-        requestOptions: {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            }
-        }
-    });
-    console.log("🥸 Disfarce de Navegador ativado com sucesso!");
-} catch (e) {
-    console.log("Aviso: Não foi possível aplicar o disfarce.");
-}
+// Suprime apenas o aviso de pesquisa, sem quebrar a biblioteca
+yahooFinance.suppressNotices(['yahooSurvey']);
 
 const app = express();
 app.use(cors());
@@ -61,7 +41,7 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; 
 }
 
-// 🚀 ROTA 1: Cotações em Lote (A versão pura e rápida)
+// 🚀 ROTA 1: Cotações em Lote (Rápida e Estável)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -132,7 +112,7 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 });
 
-// 🎯 ROTA 3: ANÁLISE TÉCNICA ON-DEMAND
+// 🎯 ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (A que usa as suas cotas com sucesso)
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     try {
@@ -149,18 +129,9 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
         const resultado = await modeloIA.generateContent(prompt);
         res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
     } catch (erro) {
-        res.status(500).json({ erro: "Erro na IA ou Bloqueio 429." });
+        res.status(500).json({ erro: "Erro na IA." });
     }
 });
 
-// 📰 ROTA 4: RADAR CORPORATIVO (MOCK TEMPORÁRIO PARA NÃO QUEBRAR O BOTÃO)
-app.get('/api/analise-ri/:ticker', (req, res) => {
-    res.json({
-        ticker: req.params.ticker,
-        pros: ["Aguardando atualização do Robô (Madrugada)...", "-", "-"],
-        contras: ["Aguardando atualização do Robô (Madrugada)...", "-", "-"]
-    });
-});
-
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor ESTÁVEL PRO na porta ${PORTA}!`));
+app.listen(PORTA, () => console.log(`✅ Servidor ESTÁVEL na porta ${PORTA}!`));
