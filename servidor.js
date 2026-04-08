@@ -36,34 +36,28 @@ function salvarNoDisco() {
     catch (e) { console.error("Erro ao salvar no disco."); }
 }
 
-// ⏳ TRADUTOR DE TEMPO PARA O YAHOO V3
 function calcularDataInicio(range) {
     const data = new Date();
     if (range === '1mo') data.setMonth(data.getMonth() - 1);
     else if (range === '6mo') data.setMonth(data.getMonth() - 6);
     else if (range === '1y') data.setFullYear(data.getFullYear() - 1);
     else if (range === '5y') data.setFullYear(data.getFullYear() - 5);
-    else data.setMonth(data.getMonth() - 1); // fallback de 1 mês
-    return data.toISOString().split('T')[0]; // Retorna YYYY-MM-DD
+    else data.setMonth(data.getMonth() - 1); 
+    return data.toISOString().split('T')[0]; 
 }
 
-// 🚀 ROTA 1: Cotações em Lote (AGORA COM BUSCA EM LOTE NATIVA DO YAHOO)
+// ROTA 1: Cotações em Lote 
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
     const tickers = tickersStr.split(',');
     const agora = Date.now();
     
-    // Filtra quais ativos realmente precisam de atualização (cache mais velho que 5 min)
     const tickersParaAtualizar = tickers.filter(t => !cacheMemoria.cotacoes[t] || (agora - cacheMemoria.cotacoes[t].timestamp >= 300000));
 
     if (tickersParaAtualizar.length > 0) {
         try {
-            console.log(`🔄 Buscando cotações em lote VIP para ${tickersParaAtualizar.length} ativos...`);
-            // O segredo de ouro: Passar a lista toda de uma vez para o Yahoo!
             const resultadosApi = await yahooFinance.quote(tickersParaAtualizar);
-            
-            // Garante que é array (se for só 1 ticker, a biblioteca retorna um objeto simples)
             const resultadosArray = Array.isArray(resultadosApi) ? resultadosApi : [resultadosApi];
 
             resultadosArray.forEach(item => {
@@ -79,19 +73,11 @@ app.get('/api/cotacoes-lote', async (req, res) => {
                 }
             });
             salvarNoDisco();
-        } catch (e) {
-            console.log(`❌ Erro na busca em lote: ${e.message}`);
-        }
+        } catch (e) { console.log(`❌ Erro na busca em lote: ${e.message}`); }
     }
 
-    // Monta o pacote de resposta juntando o que atualizou com o que estava no cache
     const respostaFinal = {};
-    tickers.forEach(t => {
-        if (cacheMemoria.cotacoes[t]) {
-            respostaFinal[t] = cacheMemoria.cotacoes[t].dados;
-        }
-    });
-
+    tickers.forEach(t => { if (cacheMemoria.cotacoes[t]) respostaFinal[t] = cacheMemoria.cotacoes[t].dados; });
     res.json(respostaFinal);
 });
 
@@ -108,58 +94,68 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 
     try {
-        console.log(`📊 Baixando histórico de ${ticker} via YahooFinance2...`);
-        const period1 = calcularDataInicio(range); // Traduz a palavra para data exata
-        
+        const period1 = calcularDataInicio(range); 
         const result = await yahooFinance.chart(ticker, { period1: period1, interval: interval });
-        
-        const processados = result.quotes
-            .filter(q => q.close !== null && !isNaN(q.close))
-            .map(q => ({ 
-                time: q.date.toISOString().split('T')[0], 
-                close: parseFloat(q.close)
-            }));
-            
+        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close)).map(q => ({ time: q.date.toISOString().split('T')[0], close: parseFloat(q.close) }));
         cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
         salvarNoDisco();
         return res.json({ ticker: ticker, historico: processados });
     } catch (erro) { 
-        console.log(`❌ Erro no gráfico de ${ticker}: ${erro.message}`); 
         if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
         res.status(500).json({erro: `Erro ao buscar histórico.`}); 
     }
 });
 
-// 🚀 NOVA ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (IA)
+// ROTA 3: ANÁLISE TÉCNICA ON-DEMAND (IA)
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
-    console.log(`🎯 [IA] Gerando Análise Técnica em tempo real para: ${ticker}`);
+    try {
+        const period1 = calcularDataInicio('6mo'); 
+        const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
+        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
+        const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`).join(', ');
+
+        const prompt = `Aja como um Analista Técnico de ações. Analise o histórico dos últimos 6 meses da ação ${ticker}: [${resumoPrecos}]. 
+        Determine a TENDÊNCIA atual (Alta, Baixa ou Lateral), o SUPORTE mais relevante e a RESISTÊNCIA. 
+        Retorne APENAS JSON: {"ticker": "${ticker}", "tendencia": "...", "suporte": "...", "resistencia": "...", "comentario": "Resumo de 1 frase"}`;
+
+        const resultado = await modeloIA.generateContent(prompt);
+        res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
+    } catch (erro) { res.status(500).json({ erro: "Erro na IA." }); }
+});
+
+// 🚀 NOVA ROTA 4: RADAR DE RI E NOTÍCIAS ON-DEMAND (IA)
+app.get('/api/analise-ri/:ticker', async (req, res) => {
+    const ticker = req.params.ticker;
+    console.log(`📰 [IA] Lendo Radar e RI para: ${ticker}`);
 
     try {
-        const period1 = calcularDataInicio('6mo'); // Pede os últimos 6 meses cravados
-        const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
-        
-        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
-        
-        // Limpa os dados para economizar tokens (pega um preço a cada 3 dias)
-        const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => {
-            return `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`;
-        }).join(', ');
+        // 1. Busca manchetes reais para dar contexto de mercado
+        const searchResult = await yahooFinance.search(ticker);
+        const noticias = (searchResult.news && searchResult.news.length > 0) 
+            ? searchResult.news.map(n => n.title).slice(0, 5).join(' | ') 
+            : 'Sem notícias recentes relevantes.';
 
-        // 2. Prepara o prompt para o Gemini
-        const prompt = `Aja como um Analista Técnico de ações. Analise o histórico de preços dos últimos 6 meses da ação ${ticker}: [${resumoPrecos}]. 
-        Determine a TENDÊNCIA atual (Alta, Baixa ou Lateral), identifique o SUPORTE mais relevante e a RESISTÊNCIA mais próxima. 
-        Retorne APENAS um JSON no formato: {"ticker": "${ticker}", "tendencia": "...", "suporte": "...", "resistencia": "...", "comentario": "Resumo de 1 frase"}`;
+        // 2. Prepara o prompt do Analista Fundamentalista
+        const prompt = `Aja como um Analista Fundamentalista Sênior. Você está analisando a empresa ${ticker}.
+        Considere o atual cenário do mercado e as seguintes manchetes financeiras recentes sobre ela: [${noticias}].
+        Faça um resumo direto e objetivo apontando os 3 principais Prós (Forças/Oportunidades do balanço ou mercado) e os 3 principais Contras (Riscos/Fraquezas/Desafios).
+        Retorne APENAS um JSON estrito no formato:
+        {
+          "ticker": "${ticker}",
+          "pros": ["Pro 1", "Pro 2", "Pro 3"],
+          "contras": ["Contra 1", "Contra 2", "Contra 3"]
+        }`;
 
-        // 3. Chama a IA
+        // 3. IA mastiga e devolve o JSON limpo
         const resultado = await modeloIA.generateContent(prompt);
-        const analiseIA = JSON.parse(resultado.response.text());
-
-        res.json(analiseIA);
+        const jsonLimpo = resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
+        
+        res.json(JSON.parse(jsonLimpo));
 
     } catch (erro) {
-        console.error("❌ Erro na Análise Técnica:", erro.message);
-        res.status(500).json({ erro: "Não foi possível gerar a análise agora." });
+        console.error("❌ Erro no Leitor de RI:", erro.message);
+        res.status(500).json({ erro: "Não foi possível gerar o radar agora." });
     }
 });
 
