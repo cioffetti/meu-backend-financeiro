@@ -3,10 +3,14 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import yahooFinance from 'yahoo-finance2'; 
 
-// 🛡️ TRUQUE ANTI-429 PARA O RENDER (O Disfarce de Navegador)
-// (Removemos o suppressNotices que causou a fúria do servidor)
+// 1. IMPORTAÇÃO CORRETA (Você tinha toda razão!)
+import YahooFinance from 'yahoo-finance2'; 
+
+// 2. A CHAVE DE IGNIÇÃO (Obrigatório na nova versão)
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+
+// 3. 🛡️ TRUQUE ANTI-429 PARA O RENDER (O Disfarce de Navegador Windows/Chrome)
 try {
     yahooFinance.setGlobalConfig({
         requestOptions: {
@@ -19,15 +23,16 @@ try {
             }
         }
     });
+    console.log("🥸 Disfarce de Navegador ativado com sucesso!");
 } catch (e) {
-    console.log("Aviso: Não foi possível aplicar o disfarce, seguindo padrão...");
+    console.log("Aviso: Não foi possível aplicar o disfarce.");
 }
 
 const app = express();
 app.use(cors());
 app.use(express.json()); 
 
-// 1. CONFIGURAÇÃO DA IA (GEMINI)
+// CONFIGURAÇÃO DA IA (GEMINI)
 const CHAVE_GEMINI = process.env.CHAVE_GEMINI;
 const genAI = new GoogleGenerativeAI(CHAVE_GEMINI);
 const modeloIA = genAI.getGenerativeModel({ 
@@ -56,7 +61,7 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; 
 }
 
-// 🚀 ROTA 1: Cotações em Lote (A versão pura, rápida e estável)
+// 🚀 ROTA 1: Cotações em Lote (A versão pura e rápida)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -148,7 +153,7 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     }
 });
 
-// 📰 ROTA 4: RADAR CORPORATIVO (MOCK TEMPORÁRIO PARA NÃO QUEBRAR O BOTÃO DO FRONT)
+// 📰 ROTA 4: RADAR CORPORATIVO (MOCK TEMPORÁRIO PARA NÃO QUEBRAR O BOTÃO)
 app.get('/api/analise-ri/:ticker', (req, res) => {
     res.json({
         ticker: req.params.ticker,
