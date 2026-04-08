@@ -155,3 +155,4 @@ app.get('/api/analise-ri/:ticker', (req, res) => {
 
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => console.log(`✅ Servidor ESTÁVEL PRO na porta ${PORTA}!`));
+// Acorda Render!
