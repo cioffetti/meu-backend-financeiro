@@ -1,172 +1,126 @@
 import 'dotenv/config';
-import YahooFinance from 'yahoo-finance2';
-import fs from 'fs';
+import express from 'express';
+import cors from 'cors';
+import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import yahooFinance from 'yahoo-finance2'; 
 
-// 1. LIGANDO AS MÁQUINAS
+yahooFinance.suppressNotices(['yahooSurvey']);
+
+const app = express();
+app.use(cors());
+app.use(express.json()); 
+
 const CHAVE_GEMINI = process.env.CHAVE_GEMINI;
 const genAI = new GoogleGenerativeAI(CHAVE_GEMINI);
-
 const modeloIA = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
     generationConfig: { responseMimeType: "application/json" } 
 });
 
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+const ARQUIVO_CACHE = './banco_de_dados.json';
+let cacheMemoria = { cotacoes: {}, historico: {} };
 
-// 2. LISTAS DE TRABALHO
-const listaBrasil = ['AGRO3.SA', 'AMOB3.SA', 'BBAS3.SA', 'BBDC3.SA', 'BBSE3.SA', 'BRSR6.SA', 'B3SA3.SA', 'CMIG3.SA', 'CXSE3.SA', 'EGIE3.SA', 'EQTL3.SA', 'ETHE11.SA', 'EZTC3.SA', 'FLRY3.SA', 'GMAT3.SA', 'GOLD11.SA', 'ITSA4.SA', 'KEPL3.SA', 'KLBN3.SA', 'LEVE3.SA', 'MBRF3.SA', 'PETR3.SA', 'PRIO3.SA', 'PSSA3.SA', 'QBTC11.SA', 'QSOL11.SA', 'RAIZ4.SA', 'RANI3.SA', 'SAPR4.SA', 'SBFG3.SA', 'SMTO3.SA', 'SOJA3.SA', 'SUZB3.SA', 'TAEE11.SA', 'TTEN3.SA', 'VAMO3.SA', 'VIVT3.SA', 'WEGE3.SA'];
-const listaIntl = ['GOOGL', 'AMZN', 'NVDA', 'TSM', 'ASML', 'AVGO', 'IRS', 'TSLA', 'MU', 'VZ', 'T', 'HD', 'SHOP', 'DIS', 'SPG', 'ANET', 'ICE', 'KO', 'EQNR', 'EPR', 'WFC', 'VICI', 'O', 'CPRT', 'ASX', 'CEPU', 'NVO', 'PLTR', 'JBL', 'QCOM', 'AAPL', 'MSFT', 'BAC', 'ORCL', 'EQT', 'MNST', 'CVS', 'HUYA', 'GPC', 'PFE', 'ROKU', 'DIBS', 'LEG', 'MBUU', 'FVRR'];
-const todasAsAcoes = [...listaBrasil, ...listaIntl];
-const ativosSemValuation = ['ETHE11.SA', 'QBTC11.SA', 'QSOL11.SA', 'GOLD11.SA'];
-
-// 3. CONFIGURAÇÕES DO ARQUITETO
-const LIMITE_DIARIO_IA = 20; // Máximo de perguntas por dia para não ser bloqueado
-const DIAS_DE_VALIDADE = 15; // 🚦 MODO PILOTO AUTOMÁTICO DE LONGO PRAZO ATIVADO!
-
-let bancoAntigo = {};
-if (fs.existsSync('indicadores.json')) {
-    try { bancoAntigo = JSON.parse(fs.readFileSync('indicadores.json', 'utf-8')); } catch (e) { }
+if (fs.existsSync(ARQUIVO_CACHE)) {
+    try { cacheMemoria = JSON.parse(fs.readFileSync(ARQUIVO_CACHE, 'utf8')); } catch (e) {}
 }
 
-function extrairMatematica(result) {
-    const getVal = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj)?.raw || null;
-    return {
-        precoAtual: getVal(result, 'financialData.currentPrice') || result.summaryDetail?.previousClose || 0,
-        pl: getVal(result, 'summaryDetail.trailingPE') || result.summaryDetail?.trailingPE, 
-        pvp: getVal(result, 'defaultKeyStatistics.priceToBook') || result.defaultKeyStatistics?.priceToBook,        dy: getVal(result, 'summaryDetail.dividendYield') || result.summaryDetail?.dividendYield,
-        pegRatio: getVal(result, 'defaultKeyStatistics.pegRatio') || result.defaultKeyStatistics?.pegRatio, 
-        evEbitda: getVal(result, 'defaultKeyStatistics.enterpriseToEbitda') || result.defaultKeyStatistics?.enterpriseToEbitda, 
-        vpa: getVal(result, 'defaultKeyStatistics.bookValue') || result.defaultKeyStatistics?.bookValue,
-        lpa: getVal(result, 'defaultKeyStatistics.trailingEps') || result.defaultKeyStatistics?.trailingEps, 
-        psr: getVal(result, 'summaryDetail.priceToSalesTrailing12Months') || result.summaryDetail?.priceToSalesTrailing12Months, 
-        roe: getVal(result, 'financialData.returnOnEquity') || result.financialData?.returnOnEquity,
-        roa: getVal(result, 'financialData.returnOnAssets') || result.financialData?.returnOnAssets, 
-        margemBruta: getVal(result, 'financialData.grossMargins') || result.financialData?.grossMargins, 
-        margemOperacional: getVal(result, 'financialData.operatingMargins') || result.financialData?.operatingMargins,
-        margemLiquida: getVal(result, 'financialData.profitMargins') || result.financialData?.profitMargins, 
-        dividaPL: getVal(result, 'financialData.debtToEquity') || result.financialData?.debtToEquity, 
-        liquidezCorrente: getVal(result, 'financialData.currentRatio') || result.financialData?.currentRatio
-    };
+function salvarNoDisco() {
+    try { fs.writeFileSync(ARQUIVO_CACHE, JSON.stringify(cacheMemoria), 'utf8'); } catch (e) {}
 }
 
-// MÁGICA DO TEMPO: Calcula quantos dias se passaram
-function calcularDiasPassados(dataString) {
-    if (!dataString) return 999; 
-    const partes = dataString.split('/');
-    if (partes.length !== 3) return 999;
-    const dataAntiga = new Date(partes[2], partes[1] - 1, partes[0]);
-    const hoje = new Date();
-    const diffTempo = Math.abs(hoje - dataAntiga);
-    return Math.floor(diffTempo / (1000 * 60 * 60 * 24));
+function calcularDataInicio(range) {
+    const data = new Date();
+    if (range === '1mo') data.setMonth(data.getMonth() - 1);
+    else if (range === '6mo') data.setMonth(data.getMonth() - 6);
+    else if (range === '1y') data.setFullYear(data.getFullYear() - 1);
+    else if (range === '5y') data.setFullYear(data.getFullYear() - 5);
+    else data.setMonth(data.getMonth() - 1); 
+    return data.toISOString().split('T')[0]; 
 }
 
-async function gerarAnaliseComIA(ticker, dadosMatematicos, isETF) {
-    const prompt = `Você é um Analista de Investimentos Sênior. Gere a análise para a empresa ${ticker} baseada nestes indicadores reais: 
-    Preço Atual de Tela: ${dadosMatematicos.precoAtual}
-    P/L: ${dadosMatematicos.pl}, ROE: ${dadosMatematicos.roe}, Margem Líquida: ${dadosMatematicos.margemLiquida}. 
+app.get('/api/cotacoes-lote', async (req, res) => {
+    const tickersStr = req.query.tickers; 
+    if (!tickersStr) return res.json({});
+    const tickers = tickersStr.split(',');
+    const agora = Date.now();
     
-    IMPORTANTE: Calcule valores REAIS e coerentes para o Preço Justo nos cenários com base no Preço Atual e nos fundamentos da empresa. NÃO copie os valores zerados de exemplo.
-    
-    Retorne o JSON estrito obedecendo o esquema: { "analise_senior": { "tendencia": "texto", "swot": { "forcas": "...", "fraquezas": "...", "oportunidades": "...", "ameacas": "..." }, "notas": { "roe": 4, "roic": 3, "ebitda": 5, "divida": 2, "receita": 4 } } ${!isETF ? `, "valuation_dcf": { "parametros": { "wacc": "12%", "crescimento_longo_prazo": "2%", "margem_seguranca": "20%" }, "status": "JUSTO", "cenarios": { "pessimista": { "preco_justo": 0.00, "descricao": "..." }, "base": { "preco_justo": 0.00, "descricao": "..." }, "otimista": { "preco_justo": 0.00, "descricao": "..." } } }` : ''} }`;
-    
-    try {
-        const resultado = await modeloIA.generateContent(prompt);
-        return JSON.parse(resultado.response.text());
-    } catch (erro) { 
-        console.error(`   🔎 Detalhe do bloqueio: ${erro.message}`);
-        return null; 
-    }
-}
+    const tickersParaAtualizar = tickers.filter(t => !cacheMemoria.cotacoes[t] || (agora - cacheMemoria.cotacoes[t].timestamp >= 300000));
 
-async function iniciarTrabalho() {
-    console.log("🤖 Iniciando 'Motor de Cache Rotativo' (Modo Piloto Automático)...\n");
-    
-    const bancoDeDadosJSON = {};
-    const dataHoje = new Date().toLocaleDateString('pt-BR'); 
-    let perguntasIADia = 0; 
-
-    for (const ticker of todasAsAcoes) {
+    if (tickersParaAtualizar.length > 0) {
         try {
-            console.log(`⏳ [${ticker}] Baixando números matemáticos do Yahoo...`);
-            const resultYahoo = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData'] });
-            const matematica = extrairMatematica(resultYahoo);
-            const isETF = ativosSemValuation.includes(ticker);
-            
-            const diasPassados = calcularDiasPassados(bancoAntigo[ticker]?.data_referencia);
-            
-            // Lógica PADRÃO do escudo protetor (Sem amnésia forçada)
-            let temAnaliseValida = diasPassados <= DIAS_DE_VALIDADE && 
-                                     bancoAntigo[ticker]?.analise_senior?.tendencia && 
-                                     bancoAntigo[ticker]?.analise_senior?.tendencia !== "Aguardando análise do especialista...";
+            const resultadosApi = await yahooFinance.quote(tickersParaAtualizar);
+            const resultadosArray = Array.isArray(resultadosApi) ? resultadosApi : [resultadosApi];
 
-            let analiseFinal = null;
-            let valuationFinal = null;
-            let dataSalvar = bancoAntigo[ticker]?.data_referencia || dataHoje; 
-
-            if (temAnaliseValida) {
-                console.log(`   ⏭️ Poupando cota! Análise tem ${diasPassados} dias (válida por ${DIAS_DE_VALIDADE} dias).`);
-                analiseFinal = bancoAntigo[ticker].analise_senior;
-                valuationFinal = bancoAntigo[ticker].valuation_dcf;
-            } else if (perguntasIADia < LIMITE_DIARIO_IA && !isETF) { 
-                console.log(`   🧠 Solicitando IA (Consulta ${perguntasIADia + 1} de ${LIMITE_DIARIO_IA})...`);
-                
-                let tentativas = 0;
-                let analiseIA = null;
-
-                while (tentativas < 3 && !analiseIA) {
-                    analiseIA = await gerarAnaliseComIA(ticker, matematica, isETF);
-                    
-                    if (!analiseIA) {
-                        tentativas++;
-                        if (tentativas < 3) {
-                            console.log(`   🚧 Bloqueio detectado! Tentativa ${tentativas} falhou. Esperando 60s para tentar de novo...`);
-                            await new Promise(r => setTimeout(r, 60000));
+            resultadosArray.forEach(item => {
+                if (item && item.symbol) {
+                    cacheMemoria.cotacoes[item.symbol] = {
+                        timestamp: agora,
+                        dados: {
+                            ticker: item.symbol,
+                            atual: item.regularMarketPrice,
+                            fechamentoAnterior: item.regularMarketPreviousClose || item.regularMarketPrice
                         }
-                    }
+                    };
                 }
-
-                if (analiseIA) {
-                    analiseFinal = analiseIA.analise_senior;
-                    valuationFinal = analiseIA.valuation_dcf;
-                    dataSalvar = dataHoje; 
-                    perguntasIADia++;
-                    console.log(`   ✅ Tese e Valuation concluídos!`);
-                } else {
-                    console.log(`   ❌ Falha definitiva na IA após 3 tentativas. Pulando ativo.`);
-                    analiseFinal = bancoAntigo[ticker]?.analise_senior || { tendencia: "Aguardando análise do especialista...", swot: { forcas: "-", fraquezas: "-", oportunidades: "-", ameacas: "-" }, notas: { roe: 0, roic: 0, ebitda: 0, divida: 0, receita: 0 } };
-                    valuationFinal = bancoAntigo[ticker]?.valuation_dcf || null;
-                }
-
-                console.log(`   ⏳ Esfriando motores por 25s para a próxima ação...`);
-                await new Promise(r => setTimeout(r, 25000));
-
-            } else {
-                if (isETF) {
-                    console.log(`   🚫 ETF detectado. Valuation não aplicável.`);
-                } else {
-                    console.log(`   ⏸️ Cota diária atingida. Retendo texto antigo para atualizar amanhã.`);
-                }
-                analiseFinal = bancoAntigo[ticker]?.analise_senior || { tendencia: "Aguardando análise do especialista...", swot: { forcas: "-", fraquezas: "-", oportunidades: "-", ameacas: "-" }, notas: { roe: 0, roic: 0, ebitda: 0, divida: 0, receita: 0 } };
-                valuationFinal = bancoAntigo[ticker]?.valuation_dcf || null;
-            }
-
-            bancoDeDadosJSON[ticker] = {
-                ...matematica,
-                data_referencia: dataSalvar,
-                analise_senior: analiseFinal,
-                valuation_dcf: valuationFinal
-            };
-
-            console.log("--------------------------------------------------");
-        } catch (erro) { 
-            console.error(`   ⚠️ Erro de rede no Yahoo para ${ticker}.\n`); 
-            bancoDeDadosJSON[ticker] = bancoAntigo[ticker] || {};
+            });
+            salvarNoDisco();
+        } catch (e) {
+            console.log(`Erro na API do Yahoo: ${e.message}`);
         }
     }
 
-    fs.writeFileSync('indicadores.json', JSON.stringify(bancoDeDadosJSON, null, 2), 'utf-8');
-    console.log("\n🎉 SUCESSO! Banco de dados atualizado com Cache Rotativo Inteligente.");
-}
+    const respostaFinal = {};
+    tickers.forEach(t => {
+        if (cacheMemoria.cotacoes[t]) respostaFinal[t] = cacheMemoria.cotacoes[t].dados;
+    });
 
-iniciarTrabalho();
+    res.json(respostaFinal);
+});
+
+app.get('/api/historico/:ticker', async (req, res) => {
+    const ticker = req.params.ticker;
+    const range = req.query.range || '1mo'; 
+    const interval = req.query.interval || '1d';
+    const chave = `${ticker}-${range}`; 
+    const agora = Date.now();
+
+    if (cacheMemoria.historico[chave] && (agora - cacheMemoria.historico[chave].timestamp < 3600000)) {
+        return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
+    }
+
+    try {
+        const period1 = calcularDataInicio(range); 
+        const result = await yahooFinance.chart(ticker, { period1: period1, interval: interval });
+        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close)).map(q => ({ time: q.date.toISOString().split('T')[0], close: parseFloat(q.close) }));
+            
+        cacheMemoria.historico[chave] = { timestamp: agora, dados: processados };
+        salvarNoDisco();
+        return res.json({ ticker: ticker, historico: processados });
+    } catch (erro) { 
+        if (cacheMemoria.historico[chave]) return res.json({ ticker: ticker, historico: cacheMemoria.historico[chave].dados });
+        res.status(500).json({erro: `Erro ao buscar histórico.`}); 
+    }
+});
+
+app.get('/api/analise-tecnica/:ticker', async (req, res) => {
+    const ticker = req.params.ticker;
+    try {
+        const period1 = calcularDataInicio('6mo'); 
+        const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
+        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
+        const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`).join(', ');
+
+        const prompt = `Aja como um Analista Técnico de ações. Analise o histórico dos últimos 6 meses da ação ${ticker}: [${resumoPrecos}]. 
+        Determine a TENDÊNCIA atual (Alta, Baixa ou Lateral), o SUPORTE mais relevante e a RESISTÊNCIA. 
+        Retorne APENAS JSON: {"ticker": "${ticker}", "tendencia": "...", "suporte": "...", "resistencia": "...", "comentario": "Resumo de 1 frase"}`;
+
+        const resultado = await modeloIA.generateContent(prompt);
+        res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro na IA." });
+    }
+});
+
+const PORTA = process.env.PORT || 3000;
+app.listen(PORTA, () => console.log(`✅ Servidor Original na porta ${PORTA}!`));
