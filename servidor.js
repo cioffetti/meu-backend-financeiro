@@ -39,6 +39,7 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; 
 }
 
+// 🚀 ROTA 1: Cotações em Lote (Original e Rápida)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -78,6 +79,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     res.json(respostaFinal);
 });
 
+// 📊 ROTA 2: Histórico para Gráficos
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -103,6 +105,7 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 });
 
+// 🎯 ROTA 3: ANÁLISE TÉCNICA ON-DEMAND
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     try {
@@ -123,4 +126,5 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
 });
 
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor Original na porta ${PORTA}!`));
+// A CORREÇÃO DE INFRAESTRUTURA DO RENDER ESTÁ AQUI ('0.0.0.0'):
+app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor Clássico rodando na porta ${PORTA}!`));
