@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs'; 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import YahooFinance from 'yahoo-finance2'; // 🛡️ Importação correta
+import YahooFinance from 'yahoo-finance2'; 
 
 // 🔑 A CHAVE DE IGNIÇÃO 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -47,7 +47,7 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; // Retorna YYYY-MM-DD
 }
 
-// 🚀 ROTA 1: Cotações em Lote (AGORA COM BUSCA EM LOTE NATIVA DO YAHOO)
+// 🚀 ROTA 1: Cotações em Lote (AGORA COM A REGRA DO DIRETOR: FRACIONAMENTO E CACHE!)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -58,33 +58,46 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersParaAtualizar = tickers.filter(t => !cacheMemoria.cotacoes[t] || (agora - cacheMemoria.cotacoes[t].timestamp >= 300000));
 
     if (tickersParaAtualizar.length > 0) {
-        try {
-            console.log(`🔄 Buscando cotações em lote VIP para ${tickersParaAtualizar.length} ativos...`);
-            // O segredo de ouro: Passar a lista toda de uma vez para o Yahoo!
-            const resultadosApi = await yahooFinance.quote(tickersParaAtualizar);
+        console.log(`🔄 Servidor solicitou ${tickersParaAtualizar.length} ativos. Iniciando Fracionamento...`);
+        
+        // DIVIDE EM LOTES DE 15 PARA NÃO IRRITAR O YAHOO
+        const TAMANHO_LOTE = 15;
+        for (let i = 0; i < tickersParaAtualizar.length; i += TAMANHO_LOTE) {
+            const subLote = tickersParaAtualizar.slice(i, i + TAMANHO_LOTE);
             
-            // Garante que é array (se for só 1 ticker, a biblioteca retorna um objeto simples)
-            const resultadosArray = Array.isArray(resultadosApi) ? resultadosApi : [resultadosApi];
+            try {
+                const resultadosApi = await yahooFinance.quote(subLote);
+                const resultadosArray = Array.isArray(resultadosApi) ? resultadosApi : [resultadosApi];
 
-            resultadosArray.forEach(item => {
-                if (item && item.symbol) {
-                    cacheMemoria.cotacoes[item.symbol] = {
-                        timestamp: agora,
-                        dados: {
-                            ticker: item.symbol,
-                            atual: item.regularMarketPrice,
-                            fechamentoAnterior: item.regularMarketPreviousClose || item.regularMarketPrice
-                        }
-                    };
+                resultadosArray.forEach(item => {
+                    if (item && item.symbol) {
+                        cacheMemoria.cotacoes[item.symbol] = {
+                            timestamp: agora,
+                            dados: {
+                                ticker: item.symbol,
+                                atual: item.regularMarketPrice,
+                                fechamentoAnterior: item.regularMarketPreviousClose || item.regularMarketPrice
+                            }
+                        };
+                    }
+                });
+                
+                // Dá um respiro de 1 segundo antes de pedir o próximo lote
+                if (i + TAMANHO_LOTE < tickersParaAtualizar.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000)); 
                 }
-            });
-            salvarNoDisco();
-        } catch (e) {
-            console.log(`❌ Erro na busca em lote: ${e.message}`);
+
+            } catch (e) {
+                // AQUI ESTÁ A MÁGICA: Se o Yahoo der 429 no sub-lote, a gente não quebra o app.
+                // A gente simplesmente avisa no log e o sistema vai usar o cacheMemoria que já estava salvo!
+                console.log(`⚠️ Bloqueio 429 parcial. O Painel usará o Cache Local para o restante.`);
+                break; // Para de pedir ao Yahoo, já que fomos bloqueados, e segue a vida com o cache.
+            }
         }
+        salvarNoDisco();
     }
 
-    // Monta o pacote de resposta juntando o que atualizou com o que estava no cache
+    // Monta o pacote de resposta juntando o que atualizou com o que já estava no cache (Sua ideia brilhante)
     const respostaFinal = {};
     tickers.forEach(t => {
         if (cacheMemoria.cotacoes[t]) {
@@ -109,7 +122,7 @@ app.get('/api/historico/:ticker', async (req, res) => {
 
     try {
         console.log(`📊 Baixando histórico de ${ticker} via YahooFinance2...`);
-        const period1 = calcularDataInicio(range); // Traduz a palavra para data exata
+        const period1 = calcularDataInicio(range); 
         
         const result = await yahooFinance.chart(ticker, { period1: period1, interval: interval });
         
@@ -136,22 +149,19 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     console.log(`🎯 [IA] Gerando Análise Técnica em tempo real para: ${ticker}`);
 
     try {
-        const period1 = calcularDataInicio('6mo'); // Pede os últimos 6 meses cravados
+        const period1 = calcularDataInicio('6mo'); 
         const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
         
         const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
         
-        // Limpa os dados para economizar tokens (pega um preço a cada 3 dias)
         const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => {
             return `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`;
         }).join(', ');
 
-        // 2. Prepara o prompt para o Gemini
         const prompt = `Aja como um Analista Técnico de ações. Analise o histórico de preços dos últimos 6 meses da ação ${ticker}: [${resumoPrecos}]. 
         Determine a TENDÊNCIA atual (Alta, Baixa ou Lateral), identifique o SUPORTE mais relevante e a RESISTÊNCIA mais próxima. 
         Retorne APENAS um JSON no formato: {"ticker": "${ticker}", "tendencia": "...", "suporte": "...", "resistencia": "...", "comentario": "Resumo de 1 frase"}`;
 
-        // 3. Chama a IA
         const resultado = await modeloIA.generateContent(prompt);
         const analiseIA = JSON.parse(resultado.response.text());
 
@@ -163,5 +173,6 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     }
 });
 
+// Garantia de infraestrutura anti-timeout
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`✅ Servidor HÍBRIDO PRO na porta ${PORTA}!`));
+app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor HÍBRIDO BLINDADO na porta ${PORTA}!`));
