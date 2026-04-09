@@ -5,7 +5,7 @@ import fs from 'fs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import yahooFinance from 'yahoo-finance2'; 
 
-yahooFinance.suppressNotices(['yahooSurvey']);
+// A LINHA QUE DERRUBAVA O SERVIDOR FOI EXTERMINADA.
 
 const app = express();
 app.use(cors());
@@ -39,7 +39,6 @@ function calcularDataInicio(range) {
     return data.toISOString().split('T')[0]; 
 }
 
-// 🚀 ROTA 1: Cotações em Lote (Original e Rápida)
 app.get('/api/cotacoes-lote', async (req, res) => {
     const tickersStr = req.query.tickers; 
     if (!tickersStr) return res.json({});
@@ -67,7 +66,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
             });
             salvarNoDisco();
         } catch (e) {
-            console.log(`Erro na API do Yahoo: ${e.message}`);
+            console.log(`Erro na API do Yahoo (Possível 429): ${e.message}`);
         }
     }
 
@@ -79,7 +78,6 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     res.json(respostaFinal);
 });
 
-// 📊 ROTA 2: Histórico para Gráficos
 app.get('/api/historico/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     const range = req.query.range || '1mo'; 
@@ -105,7 +103,6 @@ app.get('/api/historico/:ticker', async (req, res) => {
     }
 });
 
-// 🎯 ROTA 3: ANÁLISE TÉCNICA ON-DEMAND
 app.get('/api/analise-tecnica/:ticker', async (req, res) => {
     const ticker = req.params.ticker;
     try {
@@ -121,10 +118,9 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
         const resultado = await modeloIA.generateContent(prompt);
         res.json(JSON.parse(resultado.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim()));
     } catch (erro) {
-        res.status(500).json({ erro: "Erro na IA." });
+        res.status(500).json({ erro: "Erro na IA ou Bloqueio 429." });
     }
 });
 
 const PORTA = process.env.PORT || 3000;
-// A CORREÇÃO DE INFRAESTRUTURA DO RENDER ESTÁ AQUI ('0.0.0.0'):
-app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor Clássico rodando na porta ${PORTA}!`));
+app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor RESSUSCITADO na porta ${PORTA}!`));
