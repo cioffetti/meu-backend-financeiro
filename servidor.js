@@ -174,4 +174,37 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
 
 // Garantia de infraestrutura anti-timeout
 const PORTA = process.env.PORT || 3000;
+// ==========================================
+// 🌉 ROTAS DE PROXY (CHAVES ESCONDIDAS)
+// ==========================================
+
+// Ponte para Ações Brasil (Brapi)
+app.get('/api/brapi', async (req, res) => {
+    const tickers = req.query.tickers;
+    if (!tickers) return res.status(400).json({ erro: 'Tickers não informados' });
+    
+    try {
+        const url = `https://brapi.dev/api/quote/${tickers}?token=${process.env.TOKEN_BRAPI}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        res.json(data);
+    } catch (erro) {
+        res.status(500).json({ erro: 'Falha ao buscar na Brapi' });
+    }
+});
+
+// Ponte para Ações Internacionais (FMP)
+app.get('/api/fmp', async (req, res) => {
+    const tickers = req.query.tickers;
+    if (!tickers) return res.status(400).json({ erro: 'Tickers não informados' });
+    
+    try {
+        const url = `https://financialmodelingprep.com/api/v3/quote/${tickers}?apikey=${process.env.TOKEN_FMP}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        res.json(data);
+    } catch (erro) {
+        res.status(500).json({ erro: 'Falha ao buscar na FMP' });
+    }
+});
 app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor HÍBRIDO BLINDADO na porta ${PORTA}!`));
