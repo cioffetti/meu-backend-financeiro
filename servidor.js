@@ -202,7 +202,8 @@ app.get('/api/fmp', async (req, res) => {
     if (!tickers) return res.status(400).json({ erro: 'Tickers não informados' });
     
     try {
-        const url = `https://financialmodelingprep.com/api/v3/quote/${tickers}?apikey=${process.env.TOKEN_FMP}`;
+        // 🔥 A MÁGICA: Usando o 'quote-short' que está liberado para contas de 2026!
+        const url = `https://financialmodelingprep.com/api/v3/quote-short/${tickers}?apikey=${process.env.TOKEN_FMP}`;
         const response = await fetch(url);
         const data = await response.json();
         res.json(data);
