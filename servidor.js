@@ -149,9 +149,12 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
 
     try {
         const period1 = calcularDataInicio('6mo'); 
-        const result = await yahooFinance.chart(ticker, { period1: period1, interval: '1d' });
+        const period2 = new Date().toISOString().split('T')[0]; // 🛡️ A data de hoje para o Yahoo não chorar
         
-        const processados = result.quotes.filter(q => q.close !== null && !isNaN(q.close));
+        // Usando o .historical seguro
+        const result = await yahooFinance.historical(ticker, { period1: period1, period2: period2, interval: '1d' });
+        
+        const processados = result.filter(q => q.close !== null && !isNaN(q.close));
         
         const resumoPrecos = processados.filter((_, i) => i % 3 === 0).map(q => {
             return `${q.date.toISOString().split('T')[0]}: ${q.close.toFixed(2)}`;
