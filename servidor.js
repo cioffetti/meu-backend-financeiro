@@ -60,8 +60,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
     if (tickersParaAtualizar.length > 0) {
         console.log(`🔄 Servidor solicitou ${tickersParaAtualizar.length} ativos. Iniciando Fracionamento...`);
         
-        // DIVIDE EM LOTES DE 15 PARA NÃO IRRITAR O YAHOO
-        const TAMANHO_LOTE = 15;
+       const TAMANHO_LOTE = 4; // Pacotes pequenos para o Yahoo não surtar
         for (let i = 0; i < tickersParaAtualizar.length; i += TAMANHO_LOTE) {
             const subLote = tickersParaAtualizar.slice(i, i + TAMANHO_LOTE);
             
@@ -84,7 +83,7 @@ app.get('/api/cotacoes-lote', async (req, res) => {
                 
                 // Dá um respiro de 1 segundo antes de pedir o próximo lote
                 if (i + TAMANHO_LOTE < tickersParaAtualizar.length) {
-                    await new Promise(resolve => setTimeout(resolve, 1000)); 
+                    await new Promise(resolve => setTimeout(resolve, 2500)); // Espera 2.5s entre os pacotes
                 }
 
             } catch (e) {
