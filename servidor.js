@@ -196,19 +196,26 @@ app.get('/api/brapi', async (req, res) => {
     }
 });
 
-// Ponte para Ações Internacionais (FMP)
-app.get('/api/fmp', async (req, res) => {
-    const tickers = req.query.tickers;
-    if (!tickers) return res.status(400).json({ erro: 'Tickers não informados' });
+// Ponte para Ações Internacionais (Finnhub)
+app.get('/api/finnhub', async (req, res) => {
+    const tickersStr = req.query.tickers;
+    if (!tickersStr) return res.status(400).json({ erro: 'Tickers não informados' });
     
+    const tickers = tickersStr.split(',');
+    let resultados = [];
+    
+    // O Finnhub só aceita 1 por vez. O nosso servidor faz um loop super rápido pra buscar todos!
     try {
-        // 🔥 A MÁGICA: Usando o 'quote-short' que está liberado para contas de 2026!
-        const url = `https://financialmodelingprep.com/api/v3/quote-short/${tickers}?apikey=${process.env.TOKEN_FMP}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        res.json(data);
+        for (let t of tickers) {
+            const url = `https://finnhub.io/api/v1/quote?symbol=${t}&token=${process.env.TOKEN_FINNHUB}`;
+            const response = await fetch(url);
+            const data = await response.json();
+            if (data && data.c) { 
+                resultados.push({ symbol: t, price: data.c, previousClose: data.pc });
+            }
+        }
+        res.json(resultados);
     } catch (erro) {
-        res.status(500).json({ erro: 'Falha ao buscar na FMP' });
+        res.status(500).json({ erro: 'Falha ao buscar no Finnhub' });
     }
-});
-app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor HÍBRIDO BLINDADO na porta ${PORTA}!`));
+});app.listen(PORTA, '0.0.0.0', () => console.log(`✅ Servidor HÍBRIDO BLINDADO na porta ${PORTA}!`));
