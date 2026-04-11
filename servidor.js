@@ -203,18 +203,27 @@ app.get('/api/brapi', async (req, res) => {
     const agora = Date.now();
     // 🧠 Retorna da memória se pediu recentemente
     if (cacheProxy.brapi[tickers] && (agora - cacheProxy.brapi[tickers].timestamp < 300000)) {
+        console.log(`⚡ [BRAPI] Servindo do Cache os ativos: ${tickers}`);
         return res.json(cacheProxy.brapi[tickers].dados);
     }
 
     try {
+        console.log(`🌐 [BRAPI] Consultando B3 para: ${tickers}`);
         const url = `https://brapi.dev/api/quote/${tickers}?token=${process.env.TOKEN_BRAPI}`;
         const response = await fetch(url);
         const data = await response.json();
         
+        if (data.results) {
+            console.log(`✅ [BRAPI] Sucesso! ${data.results.length} ativos recebidos.`);
+        } else if (data.error) {
+            console.error(`❌ [BRAPI] Erro da API: ${data.error}`);
+        }
+
         // Grava na memória RAM
         cacheProxy.brapi[tickers] = { timestamp: agora, dados: data };
         res.json(data);
     } catch (erro) {
+        console.error(`❌ [BRAPI] Falha de conexão: ${erro.message}`);
         res.status(500).json({ erro: 'Falha ao buscar na Brapi' });
     }
 });
@@ -229,13 +238,17 @@ app.get('/api/finnhub', async (req, res) => {
     const agora = Date.now();
     
     try {
+        console.log(`🌐 [FINNHUB] Solicitado lote de ativos Internacionais...`);
+        let buscouNaApi = false;
+
         for (let t of tickers) {
-            // 🧠 Se o ativo já está na memória, pega dali e pula a chamada da API
+            // 🧠 Se o ativo já está na memória, pega dali e pula a chamada
             if (cacheProxy.finnhub[t] && (agora - cacheProxy.finnhub[t].timestamp < 300000)) {
                 resultados.push(cacheProxy.finnhub[t].dados);
                 continue; 
             }
 
+            buscouNaApi = true;
             const url = `https://finnhub.io/api/v1/quote?symbol=${t}&token=${process.env.TOKEN_FINNHUB}`;
             const response = await fetch(url);
             const data = await response.json();
@@ -249,8 +262,16 @@ app.get('/api/finnhub', async (req, res) => {
             // 🛑 FREIO ABS (300ms) - Evita bloqueio do Finnhub
             await new Promise(resolve => setTimeout(resolve, 300)); 
         }
+
+        if (buscouNaApi) {
+            console.log(`✅ [FINNHUB] Consulta finalizada na API! Resultados: ${resultados.length}`);
+        } else {
+            console.log(`⚡ [FINNHUB] Servindo 100% do Cache! (Zero chamadas na API)`);
+        }
+
         res.json(resultados);
     } catch (erro) {
+        console.error(`❌ [FINNHUB] Falha de conexão: ${erro.message}`);
         res.status(500).json({ erro: 'Falha ao buscar no Finnhub' });
     }
 });
