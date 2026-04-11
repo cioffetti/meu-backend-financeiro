@@ -195,10 +195,13 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
 // 🌉 4. PROXYS DE ALTA DISPONIBILIDADE (BRAPI & FINNHUB)
 // ==========================================
 
-// Proxy Ações Brasil (Brapi) - Com Cache de 5 min
+// Proxy Ações Brasil (Brapi) - Com Cache de 5 min e Limpeza de Nome
 app.get('/api/brapi', async (req, res) => {
-    const tickers = req.query.tickers;
-    if (!tickers) return res.status(400).json({ erro: 'Tickers não informados' });
+    let tickersRaw = req.query.tickers;
+    if (!tickersRaw) return res.status(400).json({ erro: 'Tickers não informados' });
+
+    // 🔥 O EXORCISMO DO VILÃO: Arrancamos o .SA à força aqui no Servidor!
+    const tickers = tickersRaw.replace(/\.SA/g, '');
 
     const agora = Date.now();
     // 🧠 Retorna da memória se pediu recentemente
@@ -216,7 +219,7 @@ app.get('/api/brapi', async (req, res) => {
         if (data.results) {
             console.log(`✅ [BRAPI] Sucesso! ${data.results.length} ativos recebidos.`);
         } else if (data.error) {
-            console.error(`❌ [BRAPI] Erro da API: ${data.error}`);
+            console.error(`❌ [BRAPI] Erro da API: ${JSON.stringify(data)}`);
         }
 
         // Grava na memória RAM
