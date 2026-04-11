@@ -195,42 +195,59 @@ app.get('/api/analise-tecnica/:ticker', async (req, res) => {
 // 🌉 4. PROXYS DE ALTA DISPONIBILIDADE (BRAPI & FINNHUB)
 // ==========================================
 
-// Proxy Ações Brasil (Brapi) - Com Cache de 5 min e Limpeza de Nome
+// Proxy Ações Brasil (Brapi) - 1 por vez com Freio ABS e Cache
 app.get('/api/brapi', async (req, res) => {
     let tickersRaw = req.query.tickers;
     if (!tickersRaw) return res.status(400).json({ erro: 'Tickers não informados' });
 
-    // 🔥 O EXORCISMO DO VILÃO: Arrancamos o .SA à força aqui no Servidor!
-    const tickers = tickersRaw.replace(/\.SA/g, '');
-
+    // 1. Limpa o .SA e separa a lista
+    const tickersArray = tickersRaw.replace(/\.SA/g, '').split(',');
+    let resultados = [];
     const agora = Date.now();
-    // 🧠 Retorna da memória se pediu recentemente
-    if (cacheProxy.brapi[tickers] && (agora - cacheProxy.brapi[tickers].timestamp < 300000)) {
-        console.log(`⚡ [BRAPI] Servindo do Cache os ativos: ${tickers}`);
-        return res.json(cacheProxy.brapi[tickers].dados);
-    }
+    let buscouNaApi = false;
+
+    console.log(`🌐 [BRAPI] Processando ${tickersArray.length} ativos (1 por vez)...`);
 
     try {
-        console.log(`🌐 [BRAPI] Consultando B3 para: ${tickers}`);
-        const url = `https://brapi.dev/api/quote/${tickers}?token=${process.env.TOKEN_BRAPI}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        
-        if (data.results) {
-            console.log(`✅ [BRAPI] Sucesso! ${data.results.length} ativos recebidos.`);
-        } else if (data.error) {
-            console.error(`❌ [BRAPI] Erro da API: ${JSON.stringify(data)}`);
+        for (let t of tickersArray) {
+            // 🧠 2. Verifica o Cache INDIVIDUAL
+            if (cacheProxy.brapi[t] && (agora - cacheProxy.brapi[t].timestamp < 300000)) {
+                resultados.push(cacheProxy.brapi[t].dados);
+                continue; // Pula pra próxima se já tem na memória
+            }
+
+            buscouNaApi = true;
+            const url = `https://brapi.dev/api/quote/${t}?token=${process.env.TOKEN_BRAPI}`;
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            // 3. Se a B3 devolveu a ação certinho, guarda no array e no cache
+            if (data.results && data.results.length > 0) {
+                const item = data.results[0];
+                resultados.push(item);
+                cacheProxy.brapi[t] = { timestamp: agora, dados: item };
+            } else if (data.error) {
+                console.error(`❌ [BRAPI] Erro no ativo ${t}: ${data.message}`);
+            }
+
+            // 🛑 FREIO ABS SEGURO (300ms) - Para a Brapi não bloquear por spam
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
 
-        // Grava na memória RAM
-        cacheProxy.brapi[tickers] = { timestamp: agora, dados: data };
-        res.json(data);
+        if (buscouNaApi) {
+            console.log(`✅ [BRAPI] Missão cumprida! ${resultados.length} ativos baixados e salvos no Cache.`);
+        } else {
+            console.log(`⚡ [BRAPI] Servindo 100% do Cache! Velocidade da luz.`);
+        }
+
+        // Devolve no formato exato que o Front-end espera
+        res.json({ results: resultados });
+
     } catch (erro) {
         console.error(`❌ [BRAPI] Falha de conexão: ${erro.message}`);
         res.status(500).json({ erro: 'Falha ao buscar na Brapi' });
     }
 });
-
 // Proxy Ações Internacionais (Finnhub) - Com Cache e Freio ABS
 app.get('/api/finnhub', async (req, res) => {
     const tickersStr = req.query.tickers;
